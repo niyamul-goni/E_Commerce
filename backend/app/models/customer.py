@@ -1,25 +1,30 @@
+"""
+Customer model — matches the ACTUAL Supabase `customers` table.
+The real schema has: id, email, password_hash, is_active, email_verified, created_at, updated_at
+first_name/last_name live in customer_profiles; we attach them as transient attrs from JWT.
+"""
 from __future__ import annotations
 
-from typing import Optional
+from typing import ClassVar, Optional
 
-from sqlalchemy import Boolean, String
-from sqlalchemy.orm import Mapped, relationship, mapped_column
+from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy.orm import relationship
 
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base
 
 
-class Customer(Base, TimestampMixin):
+class Customer(Base):
     __tablename__ = "customers"
+    __allow_unmapped__ = True
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
-    phone: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    email         = Column(String(255), nullable=False, unique=True)
+    password_hash = Column(String(255), nullable=False, default="supabase_managed")
+    is_active     = Column(Boolean, default=True, nullable=False)
 
-    orders = relationship("Order", back_populates="customer", cascade="all, delete-orphan")
-    reviews = relationship("Review", back_populates="customer", cascade="all, delete-orphan")
-    cart_items = relationship("CartItem", back_populates="customer", cascade="all, delete-orphan")
+    # Transient metadata fields — NOT mapped to DB columns.
+    # Populated by auth dependencies from Supabase JWT user_metadata.
+    first_name: ClassVar[str]
+    last_name:  ClassVar[str]
+    is_admin:   ClassVar[bool]
+    phone:      ClassVar[Optional[str]]

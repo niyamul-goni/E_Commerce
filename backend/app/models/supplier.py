@@ -1,21 +1,19 @@
+"""
+Supplier model — matches the actual Supabase `suppliers` table.
+"""
 from __future__ import annotations
 
-from typing import Optional
+from sqlalchemy import Boolean, Column, Integer, String
 
-from sqlalchemy import Boolean, String
-from sqlalchemy.orm import Mapped, relationship, mapped_column
-
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base
 
 
-class Supplier(Base, TimestampMixin):
+class Supplier(Base):
     __tablename__ = "suppliers"
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(150), unique=True, nullable=False, index=True)
-    contact_email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
-    contact_phone: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
-    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-
-    products = relationship("Product", back_populates="supplier")
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    name          = Column(String(150), nullable=False, unique=True)
+    contact_email = Column(String(255), unique=True)
+    contact_phone = Column(String(30), unique=True)
+    address       = Column(String(500))
+    is_active     = Column(Boolean, default=True, nullable=False)

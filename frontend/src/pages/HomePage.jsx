@@ -8,15 +8,23 @@ import PageHeader from '../components/PageHeader';
 import ProductCard from '../components/ProductCard';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../context/AuthContext';
-import { getCategoriesRequest, getProductsRequest } from '../services/catalogService';
+import {
+  getBrandsRequest,
+  getCategoriesRequest,
+  getProductsRequest,
+} from '../services/catalogService';
+import { addToCartRequest } from '../services/commerceService';
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { isAuthenticated, user } = useAuth();
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
   const [categories, setCategories] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [brands,     setBrands]     = useState([]);
+  const [products,   setProducts]   = useState([]);
+  const [addingId,   setAddingId]   = useState(null);
+  const [cartMsg,    setCartMsg]    = useState('');
 
   useEffect(() => {
     let active = true;
@@ -25,14 +33,16 @@ export default function HomePage() {
       try {
         setLoading(true);
         setError('');
-        const [categoryData, productData] = await Promise.all([
+        const [catData, brandData, productData] = await Promise.all([
           getCategoriesRequest(),
-          getProductsRequest(),
+          getBrandsRequest(),
+          getProductsRequest({ limit: 8 }),
         ]);
 
         if (!active) return;
-        setCategories(categoryData);
-        setProducts(productData.slice(0, 4));
+        setCategories(catData);
+        setBrands(brandData);
+        setProducts(productData.slice(0, 8));
       } catch (loadError) {
         if (!active) return;
         setError(loadError?.response?.data?.detail || 'Failed to load home page data.');
@@ -42,50 +52,75 @@ export default function HomePage() {
     }
 
     loadHomeData();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, []);
 
-  const featuredCategories = categories.slice(0, 3);
+  async function handleAddToCart(product) {
+    if (!user) { navigate('/login'); return; }
+    if (product.stock_quantity === 0) { setCartMsg('Out of stock.'); return; }
+    setAddingId(product.id);
+    setCartMsg('');
+    try {
+      await addToCartRequest({ customer_id: user.id, product_id: product.id, quantity: 1 });
+      setCartMsg(`"${product.name}" added to cart!`);
+    } catch (err) {
+      setCartMsg(err?.response?.data?.detail || 'Could not add to cart.');
+    } finally {
+      setAddingId(null);
+    }
+  }
+
+  const featuredCategories = categories.slice(0, 6);
 
   if (loading) return <Loader label="Preparing storefront" />;
-  if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
+  if (error)   return <ErrorState message={error} onRetry={() => window.location.reload()} />;
 
   return (
     <div className="page-stack">
+      {/* ── Hero ── */}
       <section className="hero card">
         <div className="hero__content">
-          <p className="eyebrow">FastAPI + React + PostgreSQL</p>
-          <h1>Run the full commerce flow from catalog to checkout.</h1>
+          <p className="eyebrow">🇧🇩 Made in Bangladesh · Dhaka Fashion Hub</p>
+          <h1>Discover Bangladeshi Fashion Brands</h1>
           <p>
-            Browse products, manage a cart, place orders, record payments, track shipments,
-            and handle the admin workflow from a single clean interface.
+            Shop Infinity, Richman, Yellow, Easy, Sailor, Ecstasy, Westecs & Texmart —
+            authentic Bangladeshi fashion at real BDT prices.
           </p>
           <div className="hero__actions">
-            <Button onClick={() => navigate('/products')}>Browse products</Button>
-            <Link className="button button--secondary" to={isAuthenticated ? '/orders' : '/login'}>
-              {isAuthenticated ? 'View orders' : 'Sign in'}
+            <Button id="hero-browse-btn" onClick={() => navigate('/products')}>Shop Now</Button>
+            <Link
+              id="hero-auth-btn"
+              className="button button--secondary"
+              to={isAuthenticated ? '/orders' : '/login'}
+            >
+              {isAuthenticated ? 'My Orders' : 'Sign In'}
             </Link>
           </div>
         </div>
         <div className="hero__panel">
-          <StatCard label="Products" value={products.length} hint="Featured from the live catalog" />
-          <StatCard label="Categories" value={categories.length} hint="Structured master data" />
-          <StatCard label="Flow" value="Cart → Order → Payment" hint="End-to-end commerce lifecycle" />
+          <StatCard label="Products"   value={products.length}   hint="Live from Supabase" />
+          <StatCard label="Categories" value={categories.length} hint="Organized catalog" />
+          <StatCard label="Brands"     value={brands.length}     hint="Premium labels" />
         </div>
       </section>
 
+      {/* ── Featured Products ── */}
       <section className="section-grid">
         <div>
           <PageHeader
             title="Featured products"
-            subtitle="A snapshot of the live catalog powered by the backend API."
+            subtitle="Curated picks from the live Supabase catalog."
           />
+          {cartMsg && <p className="inline-message" style={{ marginBottom: '1rem' }}>{cartMsg}</p>}
           {products.length ? (
             <div className="cards-grid">
               {products.map((product) => (
-                <ProductCard key={product.id} product={product} />
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onAddToCart={handleAddToCart}
+                  loading={addingId === product.id}
+                />
               ))}
             </div>
           ) : (
@@ -94,20 +129,43 @@ export default function HomePage() {
         </div>
 
         <aside className="sidebar-stack">
-          <PageHeader title="Categories" subtitle="Everything stays normalized in the database." />
+          <PageHeader title="Categories" subtitle="Browse the full catalog by category." />
           <div className="chip-grid">
             {featuredCategories.map((category) => (
-              <Link key={category.id} className="category-chip" to={`/products?category_id=${category.id}`}>
+              <Link
+                key={category.id}
+                id={`home-cat-${category.id}`}
+                className="category-chip"
+                to={`/products?category_id=${category.id}`}
+              >
                 {category.name}
               </Link>
             ))}
           </div>
 
+          {brands.length > 0 && (
+            <>
+              <PageHeader title="Brands" subtitle="Shop your favourite fashion labels." />
+              <div className="chip-grid">
+                {brands.map((b) => (
+                  <Link
+                    key={b.id}
+                    id={`home-brand-${b.id}`}
+                    className="category-chip"
+                    to={`/products?brand_id=${b.id}`}
+                  >
+                    {b.name}
+                  </Link>
+                ))}
+              </div>
+            </>
+          )}
+
           <div className="card callout">
-            <h3>Built for DBMS demos</h3>
+            <h3>45-table normalized schema</h3>
             <p>
-              The schema supports joins, subqueries, grouping, ordering, constraints, and
-              update/delete operations for course reporting.
+              Supports brands, variants, inventory, coupons, addresses, reviews, wishlists
+              and the full commerce lifecycle from cart to delivered shipment.
             </p>
             <Link className="button button--secondary" to="/reviews">
               Explore reviews

@@ -55,7 +55,7 @@ export default function RegisterPage() {
       });
       navigate('/', { replace: true });
     } catch (registerError) {
-      setError(registerError?.response?.data?.detail || 'Unable to register.');
+      setError(registerError?.response?.data?.detail || registerError?.message || 'Unable to register.');
     } finally {
       setSubmitting(false);
     }

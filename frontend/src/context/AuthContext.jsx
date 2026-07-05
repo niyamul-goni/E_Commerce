@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { getCurrentUserRequest, loginRequest, registerRequest } from '../services/authService';
-import { getStoredToken, setAuthToken } from '../services/api';
+import { setAuthToken } from '../services/api';
+import { supabase } from '../services/supabaseClient';
 
 const AuthContext = createContext(null);
 
@@ -9,22 +10,69 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = getStoredToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
+    let active = true;
 
-    setAuthToken(token);
-    getCurrentUserRequest()
-      .then((currentUser) => {
-        setUser(currentUser);
-      })
-      .catch(() => {
+    async function hydrateFromSupabase() {
+      const { data, error } = await supabase.auth.getSession();
+      if (!active) return;
+
+      const session = data.session;
+      if (error || !session?.access_token) {
         setAuthToken(null);
         setUser(null);
-      })
-      .finally(() => setLoading(false));
+        setLoading(false);
+        return;
+      }
+
+      setAuthToken(session.access_token);
+      try {
+        const currentUser = await getCurrentUserRequest();
+        if (!active) return;
+        setUser(currentUser);
+      } catch {
+        await supabase.auth.signOut();
+        setAuthToken(null);
+        setUser(null);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    hydrateFromSupabase();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!active) return;
+
+      if (!session?.access_token) {
+        setAuthToken(null);
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      setAuthToken(session.access_token);
+      try {
+        const currentUser = await getCurrentUserRequest();
+        if (!active) return;
+        setUser(currentUser);
+      } catch {
+        setAuthToken(null);
+        setUser(null);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function hydrateSession(token) {
@@ -46,6 +94,7 @@ export function AuthProvider({ children }) {
   }
 
   function logout() {
+    supabase.auth.signOut();
     setAuthToken(null);
     setUser(null);
   }

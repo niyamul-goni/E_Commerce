@@ -1,25 +1,26 @@
+"""
+Review model — matches the actual Supabase `reviews` table.
+"""
 from __future__ import annotations
 
-from typing import Optional
+from sqlalchemy import Column, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy.orm import relationship
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, relationship, mapped_column
-
-from app.models.base import Base, TimestampMixin
+from app.models.base import Base
 
 
-class Review(Base, TimestampMixin):
+class Review(Base):
     __tablename__ = "reviews"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False)
+    product_id  = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    rating      = Column(Integer, nullable=False)
+    comment     = Column(Text)
+
     __table_args__ = (
         UniqueConstraint("customer_id", "product_id", name="uq_reviews_customer_product"),
-        CheckConstraint("rating BETWEEN 1 AND 5", name="rating_range"),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    rating: Mapped[int] = mapped_column(Integer, nullable=False)
-    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
+    # Relationships
     customer = relationship("Customer", back_populates="reviews")
-    product = relationship("Product", back_populates="reviews")

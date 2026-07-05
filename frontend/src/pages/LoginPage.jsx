@@ -36,7 +36,7 @@ export default function LoginPage() {
       const destination = location.state?.from?.pathname || '/';
       navigate(destination, { replace: true });
     } catch (loginError) {
-      setError(loginError?.response?.data?.detail || 'Unable to log in.');
+      setError(loginError?.response?.data?.detail || loginError?.message || 'Unable to log in.');
     } finally {
       setSubmitting(false);
     }

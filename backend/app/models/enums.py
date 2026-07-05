@@ -1,26 +1,29 @@
+"""
+E-Commerce — Python Enums
+Matches the CHECK constraints in the actual Supabase schema.
+"""
 from __future__ import annotations
+import enum
 
-from enum import Enum
 
-
-class OrderStatus(str, Enum):
-    PENDING = "pending"
-    PAID = "paid"
-    SHIPPED = "shipped"
+class OrderStatus(str, enum.Enum):
+    PENDING   = "pending"
+    PAID      = "paid"
+    SHIPPED   = "shipped"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
 
 
-class PaymentStatus(str, Enum):
-    PENDING = "pending"
+class PaymentStatus(str, enum.Enum):
+    PENDING   = "pending"
     COMPLETED = "completed"
-    FAILED = "failed"
-    REFUNDED = "refunded"
+    FAILED    = "failed"
+    REFUNDED  = "refunded"
 
 
-class ShipmentStatus(str, Enum):
-    PENDING = "pending"
+class ShipmentStatus(str, enum.Enum):
+    PENDING    = "pending"
     IN_TRANSIT = "in_transit"
-    DELIVERED = "delivered"
-    RETURNED = "returned"
-    CANCELLED = "cancelled"
+    DELIVERED  = "delivered"
+    RETURNED   = "returned"
+    CANCELLED  = "cancelled"

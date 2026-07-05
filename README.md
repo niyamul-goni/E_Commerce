@@ -1,6 +1,6 @@
 # E-Commerce Management System
 
-Full-stack e-commerce assignment scaffold built with React, FastAPI, PostgreSQL, SQLAlchemy, Alembic, JWT auth, and bcrypt hashing.
+Full-stack e-commerce assignment scaffold built with React, FastAPI, PostgreSQL, SQLAlchemy, Alembic, JWT auth, and bcrypt hashing. The backend now also supports running against a Supabase-hosted Postgres database.
 
 ## Completed So Far
 
@@ -27,8 +27,10 @@ Full-stack e-commerce assignment scaffold built with React, FastAPI, PostgreSQL,
 1. Create a virtual environment inside `backend/`
 2. Install dependencies from `backend/requirements.txt`
 3. Copy `backend/.env.example` to `backend/.env`
-4. Update `DATABASE_URL`, `SECRET_KEY`, and CORS origins
+4. Update `SUPABASE_DATABASE_URL` or `DATABASE_URL`, `SECRET_KEY`, and CORS origins
 5. Run the PostgreSQL schema or let Alembic create tables
+
+If you are moving to Supabase, also set `SUPABASE_URL` and the keys you plan to use for auth or storage. The `SUPABASE_URL` project URL is not the same as the database connection string, so SQLAlchemy still needs `SUPABASE_DATABASE_URL` or `DATABASE_URL`.
 
 ## Database
 
@@ -55,4 +57,4 @@ Then load sample data from `database/seed.sql`.
 
 ## Frontend
 
-The React frontend is implemented under `frontend/` with React Router, axios-based API integration, reusable components, validation, loading states, and admin management pages.
+The React frontend is implemented under `frontend/` with React Router, axios-based API integration, reusable components, validation, loading states, and admin management pages. If you later switch auth/storage to Supabase, the frontend already has placeholder environment variables for the project URL and anon key.

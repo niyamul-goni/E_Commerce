@@ -18,8 +18,7 @@ NAMING_CONVENTION = {
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
-
-class TimestampMixin:
+    # Every table in the actual Supabase schema has created_at / updated_at
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

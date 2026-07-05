@@ -180,9 +180,33 @@ def create_review(review_in: ReviewCreate, db: Session = Depends(get_db), curren
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to create review") from exc
 
 
-@reviews_router.get("/product/{product_id}", response_model=list[ReviewRead])
-def list_reviews_for_product(product_id: int, db: Session = Depends(get_db)) -> list[Review]:
-    return db.query(Review).filter(Review.product_id == product_id).order_by(Review.created_at.desc()).all()
+@reviews_router.get("/product/{product_id}")
+def list_reviews_for_product(product_id: int, db: Session = Depends(get_db)):
+    """Return all reviews for a product using raw SQL for schema compatibility."""
+    try:
+        from sqlalchemy import text as _text
+        rows = db.execute(_text(
+            "SELECT r.id, r.customer_id, r.product_id, r.rating, r.comment, "
+            "r.created_at, c.email as customer_email "
+            "FROM reviews r "
+            "LEFT JOIN customers c ON c.id = r.customer_id "
+            "WHERE r.product_id = :pid "
+            "ORDER BY r.created_at DESC NULLS LAST"
+        ), {"pid": product_id}).fetchall()
+        return [
+            {
+                "id":           row[0],
+                "customer_id":  row[1],
+                "product_id":   row[2],
+                "rating":       row[3],
+                "comment":      row[4] or "",
+                "created_at":   row[5].isoformat() if row[5] else None,
+                "customer_email": row[6],
+            }
+            for row in rows
+        ]
+    except Exception:
+        return []
 
 
 @cart_items_router.post("", response_model=CartItemRead, status_code=status.HTTP_201_CREATED)

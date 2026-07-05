@@ -26,6 +26,7 @@ const emptyForm = {
   category_id: '',
   supplier_id: '',
   is_active: 'true',
+  available_sizes: '',
 };
 
 export default function AdminProductsPage() {
@@ -96,6 +97,7 @@ export default function AdminProductsPage() {
         category_id: Number(form.category_id),
         supplier_id: Number(form.supplier_id),
         is_active: form.is_active === 'true',
+        available_sizes: form.available_sizes || null,
       };
 
       if (editingProductId) {
@@ -124,6 +126,7 @@ export default function AdminProductsPage() {
       category_id: product.category_id,
       supplier_id: product.supplier_id,
       is_active: String(product.is_active),
+      available_sizes: product.available_sizes || '',
     });
   }
 
@@ -170,6 +173,13 @@ export default function AdminProductsPage() {
             <option value="true">Active</option>
             <option value="false">Inactive</option>
           </FormField>
+          <FormField
+            className="form-grid__full"
+            label="Available Sizes (comma-separated, e.g. XS,S,M,L,XL)"
+            value={form.available_sizes}
+            onChange={(event) => setForm({ ...form, available_sizes: event.target.value })}
+            placeholder="XS,S,M,L,XL,XXL"
+          />
           <FormField
             className="form-grid__full"
             as="textarea"

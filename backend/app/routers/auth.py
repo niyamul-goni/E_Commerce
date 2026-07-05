@@ -5,10 +5,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
-from app.core.security import create_access_token
-from app.crud.auth import authenticate_customer, create_customer, get_customer_by_email
+from app.crud.auth import get_customer_by_email
 from app.database import get_db
-from app.schemas import CustomerRead, CustomerCreate, LoginRequest, RegisterRequest, Token
+from app.core.supabase import SupabaseAuthError, create_supabase_user, login_supabase_user
+from app.schemas import CustomerRead, RegisterRequest, Token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -18,19 +18,38 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
     if get_customer_by_email(db, register_in.email) is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
-    customer = create_customer(db, CustomerCreate(**register_in.model_dump()))
-    access_token = create_access_token(customer.id)
-    return Token(access_token=access_token)
+    try:
+        create_supabase_user(
+            email=register_in.email,
+            password=register_in.password,
+            user_metadata={
+                "first_name": register_in.first_name,
+                "last_name": register_in.last_name,
+                "phone": register_in.phone,
+            },
+        )
+    except SupabaseAuthError as exc:
+        # If the user already exists in Supabase (e.g. from a prior partial
+        # signup), fall through and try to log them in instead of failing.
+        if exc.status_code != 422:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    try:
+        session = login_supabase_user(email=register_in.email, password=register_in.password)
+    except SupabaseAuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return Token(access_token=session["access_token"])
 
 
 @router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)) -> Token:
-    customer = authenticate_customer(db, form_data.username, form_data.password)
-    if customer is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
+    try:
+        session = login_supabase_user(email=form_data.username, password=form_data.password)
+    except SupabaseAuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    access_token = create_access_token(customer.id)
-    return Token(access_token=access_token)
+    return Token(access_token=session["access_token"])
 
 
 @router.get("/me", response_model=CustomerRead)

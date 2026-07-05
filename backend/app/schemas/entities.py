@@ -40,14 +40,14 @@ class CustomerUpdate(ORMModel):
 
 class CustomerRead(ORMModel):
     id: int
-    first_name: str
-    last_name: str
+    first_name: Optional[str] = "User"
+    last_name: Optional[str] = ""
     email: EmailStr
-    phone: Optional[str]
+    phone: Optional[str] = None
     is_active: bool
-    is_admin: bool
-    created_at: datetime
-    updated_at: datetime
+    is_admin: Optional[bool] = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class CategoryCreate(ORMModel):
@@ -107,6 +107,7 @@ class ProductCreate(ORMModel):
     category_id: int
     supplier_id: int
     is_active: bool = True
+    available_sizes: Optional[str] = Field(default=None, max_length=500)
 
 
 class ProductUpdate(ORMModel):
@@ -118,6 +119,7 @@ class ProductUpdate(ORMModel):
     category_id: Optional[int] = None
     supplier_id: Optional[int] = None
     is_active: Optional[bool] = None
+    available_sizes: Optional[str] = Field(default=None, max_length=500)
 
 
 class ProductRead(ORMModel):
@@ -130,6 +132,7 @@ class ProductRead(ORMModel):
     is_active: bool
     category_id: int
     supplier_id: int
+    available_sizes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

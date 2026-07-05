@@ -9,6 +9,8 @@ React + Vite frontend for the E-Commerce Management System.
 3. Install dependencies with `npm install`
 4. Start the app with `npm run dev`
 
+If you are using Supabase Auth, populate `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as well. The React app now restores sessions from Supabase and forwards the Supabase access token to the backend API.
+
 ## Available Pages
 
 - Home
@@ -21,6 +23,6 @@ React + Vite frontend for the E-Commerce Management System.
 
 ## Notes
 
-- Authentication is stored with JWT in local storage.
-- Axios automatically attaches the token to backend requests.
+- Authentication uses Supabase sessions, with the access token stored locally for backend requests.
+- Axios automatically attaches the Supabase access token to backend requests.
 - The UI is responsive and uses reusable components for forms, cards, and states.

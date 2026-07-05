@@ -1,5 +1,7 @@
 import { api } from './api';
 
+// ── Categories ──────────────────────────────────────────────────────────────
+
 export async function getCategoriesRequest() {
   const { data } = await api.get('/categories');
   return data;
@@ -19,6 +21,8 @@ export async function deleteCategoryRequest(categoryId) {
   const { data } = await api.delete(`/categories/${categoryId}`);
   return data;
 }
+
+// ── Suppliers ────────────────────────────────────────────────────────────────
 
 export async function getSuppliersRequest() {
   const { data } = await api.get('/suppliers');
@@ -40,21 +44,26 @@ export async function deleteSupplierRequest(supplierId) {
   return data;
 }
 
+// ── Brands — from the actual `brands` table via /products/brands ─────────────
+
+export async function getBrandsRequest() {
+  const { data } = await api.get('/products/brands');
+  return data;
+}
+
+// ── Products ─────────────────────────────────────────────────────────────────
+
+/**
+ * Search/filter products.
+ * Supported params: query, category_id, brand_id, supplier_id, size, min_price, max_price, limit
+ */
 export async function getProductsRequest(params = {}) {
   const query = new URLSearchParams();
-  const hasFilters = Object.values(params).some((value) => value !== undefined && value !== null && value !== '');
-
-  if (!hasFilters) {
-    const { data } = await api.get('/products');
-    return data;
-  }
-
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {
-      query.set(key, value);
+      query.set(key, String(value));
     }
   });
-
   const { data } = await api.get(`/products/search?${query.toString()}`);
   return data;
 }
