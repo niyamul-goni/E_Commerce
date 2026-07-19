@@ -22,6 +22,26 @@ export async function deleteCategoryRequest(categoryId) {
   return data;
 }
 
+// ── Subcategories ─────────────────────────────────────────────────────────────
+
+export async function getSubcategoriesRequest(categoryId = null) {
+  const params = categoryId ? `?category_id=${categoryId}` : '';
+  const { data } = await api.get(`/subcategories${params}`);
+  return data;
+}
+
+export async function getCategorySubcategoriesRequest(categoryId) {
+  const { data } = await api.get(`/categories/${categoryId}/subcategories`);
+  return data;
+}
+
+// ── Collections ───────────────────────────────────────────────────────────────
+
+export async function getCollectionsRequest() {
+  const { data } = await api.get('/collections');
+  return data;
+}
+
 // ── Suppliers ────────────────────────────────────────────────────────────────
 
 export async function getSuppliersRequest() {
@@ -73,6 +93,12 @@ export async function getProductRequest(productId) {
   return data;
 }
 
+/** Get all active variants for a product (color/size/material/stock). */
+export async function getProductVariantsRequest(productId) {
+  const { data } = await api.get(`/products/${productId}/variants`);
+  return data;
+}
+
 export async function createProductRequest(payload) {
   const { data } = await api.post('/products', payload);
   return data;
@@ -85,5 +111,15 @@ export async function updateProductRequest(productId, payload) {
 
 export async function deleteProductRequest(productId) {
   const { data } = await api.delete(`/products/${productId}`);
+  return data;
+}
+
+/** Upload an image file for a product. */
+export async function uploadProductImageRequest(productId, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const { data } = await api.post(`/products/${productId}/image`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
   return data;
 }

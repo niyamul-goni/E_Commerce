@@ -8,17 +8,17 @@ import { useAuth } from '../context/AuthContext';
 import { validateEmail, validatePassword, createEmptyErrors } from '../utils/validators';
 
 export default function LoginPage() {
-  const navigate = useNavigate();
-  const location = useLocation();
+  const navigate  = useNavigate();
+  const location  = useLocation();
   const { login } = useAuth();
-  const [form, setForm] = useState({ email: '', password: '' });
-  const [errors, setErrors] = useState(createEmptyErrors());
+  const [form, setForm]         = useState({ email: '', password: '' });
+  const [errors, setErrors]     = useState(createEmptyErrors());
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError]       = useState('');
 
   function validateForm() {
     const nextErrors = {
-      email: validateEmail(form.email),
+      email:    validateEmail(form.email),
       password: validatePassword(form.password),
     };
     setErrors(nextErrors);
@@ -32,9 +32,15 @@ export default function LoginPage() {
     try {
       setSubmitting(true);
       setError('');
-      await login(form.email, form.password);
-      const destination = location.state?.from?.pathname || '/';
-      navigate(destination, { replace: true });
+      const loggedInUser = await login(form.email, form.password);
+
+      // Role-based redirect
+      if (loggedInUser?.is_admin) {
+        navigate('/manager', { replace: true });
+      } else {
+        const destination = location.state?.from?.pathname || '/';
+        navigate(destination, { replace: true });
+      }
     } catch (loginError) {
       setError(loginError?.response?.data?.detail || loginError?.message || 'Unable to log in.');
     } finally {
@@ -45,14 +51,14 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       <section className="auth-card card">
-        <PageHeader title="Welcome back" subtitle="Log in to continue shopping and checkout." />
+        <PageHeader title="Welcome back" subtitle="Sign in to continue." />
         {error ? <ErrorState title="Login failed" message={error} /> : null}
         <form className="form-stack" onSubmit={handleSubmit}>
           <FormField
             label="Email"
             type="email"
             value={form.email}
-            onChange={(event) => setForm({ ...form, email: event.target.value })}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
             error={errors.email}
             placeholder="you@example.com"
           />
@@ -60,13 +66,11 @@ export default function LoginPage() {
             label="Password"
             type="password"
             value={form.password}
-            onChange={(event) => setForm({ ...form, password: event.target.value })}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
             error={errors.password}
             placeholder="Enter your password"
           />
-          <Button type="submit" loading={submitting}>
-            Sign in
-          </Button>
+          <Button type="submit" loading={submitting}>Sign in</Button>
         </form>
         <p className="auth-card__footer">
           New here? <Link to="/register">Create an account</Link>

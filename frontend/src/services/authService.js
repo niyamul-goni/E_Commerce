@@ -1,5 +1,4 @@
 import { api } from './api';
-import { supabase } from './supabaseClient';
 
 export async function registerRequest(payload) {
   // Register through the backend API which uses the Supabase service-role key
@@ -9,20 +8,16 @@ export async function registerRequest(payload) {
 }
 
 export async function loginRequest(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
+  // The backend /auth/login uses OAuth2PasswordRequestForm which requires
+  // application/x-www-form-urlencoded, NOT JSON.
+  const formData = new URLSearchParams();
+  formData.append('username', email);
+  formData.append('password', password);
+
+  const response = await api.post('/auth/login', formData, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   });
-
-  if (error) {
-    throw error;
-  }
-
-  if (!data.session?.access_token) {
-    throw new Error('Unable to establish a Supabase session.');
-  }
-
-  return { access_token: data.session.access_token };
+  return response.data;
 }
 
 export async function getCurrentUserRequest() {

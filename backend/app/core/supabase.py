@@ -41,10 +41,32 @@ def _error_detail(response: httpx.Response) -> str:
     return str(payload)
 
 
+def _get_user_by_email(email: str) -> dict[str, Any] | None:
+    """Look up an existing Supabase auth user by email using the admin API."""
+    response = httpx.get(
+        f"{_base_url()}/auth/v1/admin/users",
+        headers=_header_value(settings.SUPABASE_SERVICE_ROLE_KEY),
+        params={"filter": f"email.eq.{email}"},
+        timeout=15.0,
+    )
+    if response.status_code != 200:
+        return None
+    data = response.json()
+    users = data.get("users", [])
+    return users[0] if users else None
+
+
 def create_supabase_user(*, email: str, password: str, user_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Create or update a Supabase auth user.
+
+    If the user already exists (from a prior failed registration), we update
+    their password and metadata so login always succeeds with the latest credentials.
+    Always sets email_confirm=True so no verification email is needed.
+    """
     if not settings.SUPABASE_SERVICE_ROLE_KEY:
         raise SupabaseAuthError("Supabase service role key is not configured", 503)
 
+    # Try to create
     response = httpx.post(
         f"{_base_url()}/auth/v1/admin/users",
         headers=_header_value(settings.SUPABASE_SERVICE_ROLE_KEY),
@@ -56,9 +78,30 @@ def create_supabase_user(*, email: str, password: str, user_metadata: dict[str, 
         },
         timeout=15.0,
     )
-    if response.status_code not in (200, 201):
-        raise SupabaseAuthError(_error_detail(response), response.status_code)
-    return response.json()
+
+    if response.status_code in (200, 201):
+        return response.json()
+
+    # User already exists — update password + metadata so login works
+    if response.status_code == 422:
+        existing = _get_user_by_email(email)
+        if existing:
+            user_id = existing["id"]
+            update_resp = httpx.put(
+                f"{_base_url()}/auth/v1/admin/users/{user_id}",
+                headers=_header_value(settings.SUPABASE_SERVICE_ROLE_KEY),
+                json={
+                    "password": password,
+                    "email_confirm": True,
+                    "user_metadata": user_metadata,
+                },
+                timeout=15.0,
+            )
+            if update_resp.status_code in (200, 201):
+                return update_resp.json()
+            raise SupabaseAuthError(_error_detail(update_resp), update_resp.status_code)
+
+    raise SupabaseAuthError(_error_detail(response), response.status_code)
 
 
 def login_supabase_user(*, email: str, password: str) -> dict[str, Any]:

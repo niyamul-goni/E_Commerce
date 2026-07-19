@@ -1,5 +1,7 @@
 import { api } from './api';
 
+// ── Orders ────────────────────────────────────────────────────────────────────
+
 export async function createOrderRequest(payload) {
   const { data } = await api.post('/orders', payload);
   return data;
@@ -35,6 +37,8 @@ export async function removeOrderItemRequest(orderId, orderItemId) {
   return data;
 }
 
+// ── Payments ──────────────────────────────────────────────────────────────────
+
 export async function recordPaymentRequest(payload) {
   const { data } = await api.post('/payments', payload);
   return data;
@@ -44,6 +48,8 @@ export async function getPaymentByOrderRequest(orderId) {
   const { data } = await api.get(`/payments/order/${orderId}`);
   return data;
 }
+
+// ── Shipments ─────────────────────────────────────────────────────────────────
 
 export async function createShipmentRequest(payload) {
   const { data } = await api.post('/shipments', payload);
@@ -55,6 +61,8 @@ export async function getShipmentByOrderRequest(orderId) {
   return data;
 }
 
+// ── Reviews ───────────────────────────────────────────────────────────────────
+
 export async function createReviewRequest(payload) {
   const { data } = await api.post('/reviews', payload);
   return data;
@@ -64,6 +72,8 @@ export async function getReviewsByProductRequest(productId) {
   const { data } = await api.get(`/reviews/product/${productId}`);
   return data;
 }
+
+// ── Cart ──────────────────────────────────────────────────────────────────────
 
 export async function getMyCartItemsRequest() {
   const { data } = await api.get('/cart-items/me');
@@ -85,7 +95,67 @@ export async function deleteCartItemRequest(cartItemId) {
   return data;
 }
 
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
 export async function getDashboardSummaryRequest() {
   const { data } = await api.get('/dashboard/summary');
+  return data;
+}
+
+// ── Wishlist ──────────────────────────────────────────────────────────────────
+
+export async function getWishlistRequest() {
+  const { data } = await api.get('/wishlist');
+  return data;
+}
+
+export async function addToWishlistRequest(variantId) {
+  const { data } = await api.post(`/wishlist/${variantId}`);
+  return data;
+}
+
+export async function removeFromWishlistRequest(itemId) {
+  const { data } = await api.delete(`/wishlist/${itemId}`);
+  return data;
+}
+
+// ── Customer Addresses ────────────────────────────────────────────────────────
+
+export async function getAddressesRequest() {
+  const { data } = await api.get('/addresses');
+  return data;
+}
+
+export async function createAddressRequest(payload) {
+  const { data } = await api.post('/addresses', payload);
+  return data;
+}
+
+export async function updateAddressRequest(addressId, payload) {
+  const { data } = await api.put(`/addresses/${addressId}`, payload);
+  return data;
+}
+
+export async function deleteAddressRequest(addressId) {
+  const { data } = await api.delete(`/addresses/${addressId}`);
+  return data;
+}
+
+// ── Profile ───────────────────────────────────────────────────────────────────
+
+export async function getMyProfileRequest() {
+  const { data } = await api.get('/profile');
+  return data;
+}
+
+export async function updateMyProfileRequest(payload) {
+  const { data } = await api.put('/profile', payload);
+  return data;
+}
+
+// ── Coupons ───────────────────────────────────────────────────────────────────
+
+export async function validateCouponRequest(code, subtotal) {
+  const { data } = await api.post('/coupons/validate', { code, subtotal });
   return data;
 }

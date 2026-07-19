@@ -13,6 +13,7 @@ import {
   getProductsRequest,
   getSuppliersRequest,
   updateProductRequest,
+  uploadProductImageRequest,
 } from '../../services/catalogService';
 import { createEmptyErrors, validatePrice, validateQuantity, validateRequired } from '../../utils/validators';
 import { formatCurrency } from '../../utils/format';
@@ -39,6 +40,8 @@ export default function AdminProductsPage() {
   const [formErrors, setFormErrors] = useState(createEmptyErrors());
   const [submitting, setSubmitting] = useState(false);
   const [editingProductId, setEditingProductId] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
 
   async function loadData() {
     try {
@@ -80,6 +83,16 @@ export default function AdminProductsPage() {
     setForm(emptyForm);
     setEditingProductId(null);
     setFormErrors(createEmptyErrors());
+    setSelectedFile(null);
+    setImagePreview(null);
+  }
+
+  function handleFileChange(event) {
+    const file = event.target.files[0];
+    if (file) {
+      setSelectedFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    }
   }
 
   async function handleSubmit(event) {
@@ -100,10 +113,18 @@ export default function AdminProductsPage() {
         available_sizes: form.available_sizes || null,
       };
 
+      let savedProductId = editingProductId;
+
       if (editingProductId) {
         await updateProductRequest(editingProductId, payload);
       } else {
-        await createProductRequest(payload);
+        const created = await createProductRequest(payload);
+        savedProductId = created.id;
+      }
+
+      // Upload image if a file was selected
+      if (selectedFile && savedProductId) {
+        await uploadProductImageRequest(savedProductId, selectedFile);
       }
 
       resetForm();
@@ -188,6 +209,22 @@ export default function AdminProductsPage() {
             value={form.description}
             onChange={(event) => setForm({ ...form, description: event.target.value })}
           />
+          <div className="form-grid__full" style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Product Image</label>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              onChange={handleFileChange}
+              style={{ display: 'block' }}
+            />
+            {imagePreview && (
+              <img
+                src={imagePreview}
+                alt="Preview"
+                style={{ marginTop: '0.75rem', maxWidth: '200px', maxHeight: '200px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #e5e7eb' }}
+              />
+            )}
+          </div>
           <div className="form-grid__full">
             <Button type="submit" loading={submitting}>{editingProductId ? 'Update product' : 'Create product'}</Button>
             {editingProductId ? (
@@ -206,6 +243,7 @@ export default function AdminProductsPage() {
             <table>
               <thead>
                 <tr>
+                  <th>Image</th>
                   <th>Name</th>
                   <th>Price</th>
                   <th>Stock</th>
@@ -216,6 +254,17 @@ export default function AdminProductsPage() {
               <tbody>
                 {products.map((product) => (
                   <tr key={product.id}>
+                    <td>
+                      {product.image_url ? (
+                        <img
+                          src={product.image_url.startsWith('/static') ? `http://localhost:8000${product.image_url}` : product.image_url}
+                          alt={product.name}
+                          style={{ width: '50px', height: '50px', objectFit: 'cover', borderRadius: '6px' }}
+                        />
+                      ) : (
+                        <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>No image</span>
+                      )}
+                    </td>
                     <td>
                       <strong>{product.name}</strong>
                       <p className="muted">{product.sku}</p>

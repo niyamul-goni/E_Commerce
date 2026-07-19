@@ -16,12 +16,13 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login
 
 
 def _enrich_customer(customer: Customer, supabase_user: dict) -> Customer:
-    """Populate transient metadata fields from Supabase JWT user_metadata."""
+    """Populate transient metadata fields from Supabase JWT user_metadata.
+    NOTE: is_admin is now a real DB column — do NOT overwrite it from JWT."""
     metadata = supabase_user.get("user_metadata") or {}
     customer.first_name = metadata.get("first_name") or "User"
     customer.last_name  = metadata.get("last_name")  or ""
     customer.phone      = metadata.get("phone")
-    customer.is_admin   = bool(metadata.get("is_admin", False))
+    # is_admin comes from the DB column, not from JWT metadata
     return customer
 
 
@@ -54,14 +55,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
                 phone=metadata.get("phone"),
                 password=uuid4().hex,
                 is_active=True,
-                is_admin=bool(metadata.get("is_admin", False)),
+                is_admin=False,
             ),
         )
 
     if user is None:
         raise credentials_exception
 
-    # Always re-populate transient metadata from the JWT (they aren't in the DB)
+    # Populate transient name/phone from JWT, but keep is_admin from DB
     _enrich_customer(user, supabase_user)
     return user
 

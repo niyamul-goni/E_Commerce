@@ -1,86 +1,50 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { getCurrentUserRequest, loginRequest, registerRequest } from '../services/authService';
-import { setAuthToken } from '../services/api';
-import { supabase } from '../services/supabaseClient';
+import { getStoredToken, setAuthToken } from '../services/api';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
 
-    async function hydrateFromSupabase() {
-      const { data, error } = await supabase.auth.getSession();
-      if (!active) return;
+    async function hydrateFromStorage() {
+      const token = getStoredToken();
+      if (!token) { setLoading(false); return; }
 
-      const session = data.session;
-      if (error || !session?.access_token) {
-        setAuthToken(null);
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-
-      setAuthToken(session.access_token);
+      setAuthToken(token);
       try {
         const currentUser = await getCurrentUserRequest();
         if (!active) return;
         setUser(currentUser);
       } catch {
-        await supabase.auth.signOut();
         setAuthToken(null);
         setUser(null);
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     }
 
-    hydrateFromSupabase();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!active) return;
-
-      if (!session?.access_token) {
-        setAuthToken(null);
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-
-      setAuthToken(session.access_token);
-      try {
-        const currentUser = await getCurrentUserRequest();
-        if (!active) return;
-        setUser(currentUser);
-      } catch {
-        setAuthToken(null);
-        setUser(null);
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
+    hydrateFromStorage();
+    return () => { active = false; };
   }, []);
 
   async function hydrateSession(token) {
     setAuthToken(token);
-    const currentUser = await getCurrentUserRequest();
-    setUser(currentUser);
-    setLoading(false);
-    return currentUser;
+    try {
+      const currentUser = await getCurrentUserRequest();
+      setUser(currentUser);
+      setLoading(false);
+      return currentUser;
+    } catch (err) {
+      setAuthToken(null);
+      setUser(null);
+      setLoading(false);
+      throw err;
+    }
   }
 
   async function login(email, password) {
@@ -94,16 +58,19 @@ export function AuthProvider({ children }) {
   }
 
   function logout() {
-    supabase.auth.signOut();
     setAuthToken(null);
     setUser(null);
   }
+
+  const isManager = Boolean(user?.is_admin);
 
   const value = {
     user,
     loading,
     isAuthenticated: Boolean(user),
-    isAdmin: Boolean(user?.is_admin),
+    isAdmin:         isManager,  // backward compat
+    isManager,                   // semantic alias
+    role:            isManager ? 'manager' : 'customer',
     login,
     register,
     logout,
@@ -120,8 +87,6 @@ export function AuthProvider({ children }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }

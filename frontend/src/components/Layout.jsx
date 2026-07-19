@@ -1,47 +1,56 @@
-import { NavLink, Outlet, Link } from 'react-router-dom';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import Button from './Button';
 
 export default function Layout() {
-  const { user, isAuthenticated, isAdmin, logout } = useAuth();
+  const { user, isAuthenticated, isManager, logout } = useAuth();
+  const navigate = useNavigate();
+
+  function handleLogout() {
+    logout();
+    navigate('/login', { replace: true });
+  }
+
+  const displayName = user?.first_name || user?.email?.split('@')[0] || 'Account';
 
   return (
     <div className="app-shell">
       <header className="site-header">
         <div className="site-header__brand">
-          <Link to="/" className="brand-mark">
-            NovaMart
-          </Link>
-          <span className="brand-tag">Commerce OS</span>
+          <Link to="/" className="brand-mark">NovaMart</Link>
+          <span className="brand-tag">Commerce</span>
         </div>
 
         <nav className="site-nav">
-          <NavLink to="/" end>
-            Home
-          </NavLink>
+          <NavLink to="/" end>Home</NavLink>
           <NavLink to="/products">Products</NavLink>
-          <NavLink to="/orders">Orders</NavLink>
-          <NavLink to="/reviews">Reviews</NavLink>
-          <NavLink to="/cart">Cart</NavLink>
-          {isAdmin ? <NavLink to="/admin">Admin</NavLink> : null}
+          {isAuthenticated && !isManager && (
+            <>
+              <NavLink to="/cart">Cart</NavLink>
+              <NavLink to="/orders">Orders</NavLink>
+              <NavLink to="/wishlist">Wishlist</NavLink>
+              <NavLink to="/reviews">Reviews</NavLink>
+            </>
+          )}
+          {/* Managers get a shortcut to their panel */}
+          {isManager && (
+            <NavLink to="/manager">Manager Panel ↗</NavLink>
+          )}
         </nav>
 
         <div className="site-header__actions">
           {isAuthenticated ? (
             <>
-              <span className="user-chip">{user?.first_name} {user?.last_name}</span>
-              <Button variant="secondary" onClick={logout}>
-                Logout
-              </Button>
+              {!isManager && (
+                <Link to="/profile" className="user-chip">
+                  {displayName}
+                </Link>
+              )}
+              <button className="button button--secondary" onClick={handleLogout}>Logout</button>
             </>
           ) : (
             <>
-              <Link to="/login" className="button button--secondary">
-                Login
-              </Link>
-              <Link to="/register" className="button">
-                Register
-              </Link>
+              <Link to="/login"    className="button button--secondary">Login</Link>
+              <Link to="/register" className="button">Register</Link>
             </>
           )}
         </div>

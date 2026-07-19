@@ -28,12 +28,12 @@ def create_customer(db: Session, customer_in: CustomerCreate) -> Customer:
         email=customer_in.email,
         password_hash=get_password_hash(customer_in.password),
         is_active=customer_in.is_active,
+        is_admin=customer_in.is_admin,
     )
-    # Attach metadata as Python attributes (not DB columns)
+    # Attach transient metadata as Python attributes (name/phone not in customers table)
     customer.first_name = customer_in.first_name
     customer.last_name  = customer_in.last_name
     customer.phone      = customer_in.phone
-    customer.is_admin   = customer_in.is_admin
 
     db.add(customer)
     db.commit()
@@ -43,8 +43,8 @@ def create_customer(db: Session, customer_in: CustomerCreate) -> Customer:
     customer.first_name = customer_in.first_name
     customer.last_name  = customer_in.last_name
     customer.phone      = customer_in.phone
-    customer.is_admin   = customer_in.is_admin
     return customer
+
 
 
 def update_customer(db: Session, customer: Customer, customer_in: CustomerUpdate) -> Customer:

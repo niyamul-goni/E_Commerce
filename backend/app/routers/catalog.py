@@ -5,9 +5,12 @@ Products use: brands, subcategories, categories, product_variants, inventory tab
 """
 from __future__ import annotations
 
+import os
+import uuid
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -323,3 +326,206 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     if deleted is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return Message(message="Product deleted successfully")
+
+
+# ── Product Image Upload ──────────────────────────────────────────────────────
+
+# Resolve the upload directory (same as main.py)
+_UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "products"
+
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
+@products_router.post("/{product_id}/image", tags=["products"])
+async def upload_product_image(
+    product_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Upload an image for a product and set it as the primary image."""
+
+    # Validate the product exists
+    exists = db.execute(
+        text("SELECT id FROM products WHERE id = :pid"), {"pid": product_id}
+    ).fetchone()
+    if not exists:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Validate file extension
+    ext = Path(file.filename).suffix.lower() if file.filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    # Read file content (enforce max size)
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 5 MB.")
+
+    # Save to disk with a unique filename
+    _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    unique_name = f"{product_id}_{uuid.uuid4().hex}{ext}"
+    file_path = _UPLOAD_DIR / unique_name
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Build the URL path the frontend will use to display the image
+    image_url = f"/static/products/{unique_name}"
+
+    # Upsert into product_images table
+    existing = db.execute(
+        text("SELECT id FROM product_images WHERE product_id = :pid AND is_primary = true"),
+        {"pid": product_id},
+    ).fetchone()
+
+    if existing:
+        db.execute(
+            text("UPDATE product_images SET image_url = :url WHERE id = :id"),
+            {"url": image_url, "id": existing[0]},
+        )
+    else:
+        db.execute(
+            text(
+                "INSERT INTO product_images (product_id, image_url, is_primary, sort_order) "
+                "VALUES (:pid, :url, true, 0)"
+            ),
+            {"pid": product_id, "url": image_url},
+        )
+
+    db.commit()
+
+    return {"message": "Image uploaded successfully", "image_url": image_url}
+
+
+# ── Subcategories ─────────────────────────────────────────────────────────────
+
+subcategories_router = APIRouter(prefix="/subcategories", tags=["subcategories"])
+
+
+@subcategories_router.get("", response_model=list[dict])
+def list_subcategories(category_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """List active subcategories, optionally filtered by parent category_id."""
+    sql = (
+        "SELECT sc.id, sc.name, sc.slug, sc.category_id, c.name AS category_name, "
+        "sc.description, sc.is_active, sc.sort_order "
+        "FROM subcategories sc "
+        "LEFT JOIN categories c ON c.id = sc.category_id "
+        "WHERE sc.is_active = true"
+    )
+    params: dict = {}
+    if category_id is not None:
+        sql += " AND sc.category_id = :cat_id"
+        params["cat_id"] = category_id
+    sql += " ORDER BY sc.sort_order, sc.name"
+    rows = db.execute(text(sql), params).fetchall()
+    return [
+        {
+            "id": r[0], "name": r[1], "slug": r[2],
+            "category_id": r[3], "category_name": r[4],
+            "description": r[5], "is_active": r[6], "sort_order": r[7],
+        }
+        for r in rows
+    ]
+
+
+@categories_router.get("/{category_id}/subcategories", response_model=list[dict])
+def get_category_subcategories(category_id: int, db: Session = Depends(get_db)):
+    """Get all subcategories for a given category."""
+    rows = db.execute(text(
+        "SELECT id, name, slug, description, is_active FROM subcategories "
+        "WHERE category_id = :cat_id AND is_active = true ORDER BY sort_order, name"
+    ), {"cat_id": category_id}).fetchall()
+    return [
+        {"id": r[0], "name": r[1], "slug": r[2], "description": r[3], "is_active": r[4]}
+        for r in rows
+    ]
+
+
+# ── Collections ───────────────────────────────────────────────────────────────
+
+collections_router = APIRouter(prefix="/collections", tags=["collections"])
+
+
+@collections_router.get("", response_model=list[dict])
+def list_collections(db: Session = Depends(get_db)):
+    """List all active collections with season name."""
+    rows = db.execute(text(
+        "SELECT c.id, c.name, c.slug, c.description, c.banner_url, "
+        "c.start_date, c.end_date, c.is_active, s.name AS season_name "
+        "FROM collections c "
+        "LEFT JOIN seasons s ON s.id = c.season_id "
+        "WHERE c.is_active = true ORDER BY c.start_date DESC NULLS LAST, c.name"
+    )).fetchall()
+    return [
+        {
+            "id": r[0], "name": r[1], "slug": r[2], "description": r[3],
+            "banner_url": r[4],
+            "start_date": r[5].isoformat() if r[5] else None,
+            "end_date": r[6].isoformat() if r[6] else None,
+            "is_active": r[7], "season_name": r[8],
+        }
+        for r in rows
+    ]
+
+
+# ── Product Variants ──────────────────────────────────────────────────────────
+
+@products_router.get("/{product_id}/variants", tags=["products"])
+def get_product_variants(product_id: int, db: Session = Depends(get_db)):
+    """
+    Return all active variants for a product, enriched with color/size/material
+    names and total available inventory across all warehouses.
+    """
+    rows = db.execute(text("""
+        SELECT
+            pv.id,
+            pv.sku,
+            pv.price_override,
+            pv.weight_grams,
+            pv.is_active,
+            pv.image_url,
+            co.id   AS color_id,
+            co.name AS color_name,
+            co.hex_code,
+            sz.id   AS size_id,
+            sz.name AS size_name,
+            sz.size_category,
+            mt.id   AS material_id,
+            mt.name AS material_name,
+            COALESCE(SUM(inv.current_stock - inv.reserved_stock), 0) AS available_stock
+        FROM product_variants pv
+        LEFT JOIN colors    co  ON co.id  = pv.color_id
+        LEFT JOIN sizes     sz  ON sz.id  = pv.size_id
+        LEFT JOIN materials mt  ON mt.id  = pv.material_id
+        LEFT JOIN inventory inv ON inv.variant_id = pv.id
+        WHERE pv.product_id = :pid AND pv.is_active = true
+        GROUP BY pv.id, pv.image_url, co.id, co.name, co.hex_code,
+                 sz.id, sz.name, sz.size_category,
+                 mt.id, mt.name
+        ORDER BY sz.sort_order NULLS LAST, co.name, pv.id
+    """), {"pid": product_id}).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "sku": r[1],
+            "price_override": float(r[2]) if r[2] is not None else None,
+            "weight_grams": r[3],
+            "is_active": r[4],
+            "image_url": r[5],
+            "color_id": r[6],
+            "color_name": r[7],
+            "hex_code": r[8],
+            "size_id": r[9],
+            "size_name": r[10],
+            "size_category": r[11],
+            "material_id": r[12],
+            "material_name": r[13],
+            "available_stock": int(r[14]),
+        }
+        for r in rows
+    ]
+

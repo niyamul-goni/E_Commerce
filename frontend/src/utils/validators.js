@@ -34,3 +34,12 @@ export function validateRating(value) {
   if (numberValue < 1 || numberValue > 5) return 'Rating must be between 1 and 5';
   return '';
 }
+
+export function validatePhone(value) {
+  if (!value || !value.trim()) return '';  // phone is optional
+  const digits = value.replace(/\D/g, '');
+  if (digits.length !== 11) return 'Phone number must be exactly 11 digits';
+  if (!digits.startsWith('0')) return 'Phone number must start with 0 (e.g. 01775529619)';
+  return '';
+}
+

@@ -4,12 +4,20 @@ Production-quality e-commerce API demonstrating normalized 45-table PostgreSQL d
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+
+# Resolve the static upload directory relative to the backend root
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = BACKEND_DIR / "static"
+UPLOAD_DIR = STATIC_DIR / "products"
 
 from app.core.config import settings
 from app.database import init_db
@@ -17,20 +25,28 @@ import app.models  # noqa: F401 — ensures all models are registered
 
 # Import routers
 from app.routers import (
-    # Existing routers (kept for backward compat)
+    addresses_router,
     auth_router,
     cart_items_router,
     categories_router,
+    collections_router,
+    coupon_validate_router,
     customers_router,
     dashboard_router,
     order_items_router,
     orders_router,
     payments_router,
     products_router,
+    profile_router,
     reviews_router,
     shipments_router,
+    subcategories_router,
     suppliers_router,
+    wishlist_router,
 )
+from app.routers.auth import manager_router
+from app.routers.analytics import router as analytics_router
+
 
 # Extended routers disabled — they reference a normalized schema
 # that does not exist in the current Supabase database.
@@ -42,6 +58,8 @@ _extended_routers = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure the upload directory exists
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
     yield
 
@@ -86,6 +104,13 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ─────────────────────────────────────────────────────────
+# Static files — serve uploaded product images
+# ─────────────────────────────────────────────────────────
+
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# ─────────────────────────────────────────────────────────
 # Routers — v1
 # ─────────────────────────────────────────────────────────
 
@@ -94,17 +119,23 @@ PREFIX = settings.API_V1_STR
 # Auth & customers
 app.include_router(auth_router,      prefix=PREFIX)
 app.include_router(customers_router, prefix=PREFIX)
+app.include_router(profile_router,   prefix=PREFIX)
+app.include_router(addresses_router, prefix=PREFIX)
+app.include_router(wishlist_router,  prefix=PREFIX)
 
 # Catalog
-app.include_router(categories_router, prefix=PREFIX)
-app.include_router(suppliers_router,  prefix=PREFIX)
-app.include_router(products_router,   prefix=PREFIX)
+app.include_router(categories_router,   prefix=PREFIX)
+app.include_router(subcategories_router, prefix=PREFIX)
+app.include_router(collections_router,  prefix=PREFIX)
+app.include_router(suppliers_router,    prefix=PREFIX)
+app.include_router(products_router,     prefix=PREFIX)
 
 # Sales
-app.include_router(orders_router,     prefix=PREFIX)
-app.include_router(order_items_router,prefix=PREFIX)
-app.include_router(payments_router,   prefix=PREFIX)
-app.include_router(shipments_router,  prefix=PREFIX)
+app.include_router(orders_router,      prefix=PREFIX)
+app.include_router(order_items_router, prefix=PREFIX)
+app.include_router(payments_router,    prefix=PREFIX)
+app.include_router(shipments_router,   prefix=PREFIX)
+app.include_router(coupon_validate_router, prefix=PREFIX)
 
 # Engagement
 app.include_router(reviews_router,    prefix=PREFIX)
@@ -112,6 +143,11 @@ app.include_router(cart_items_router, prefix=PREFIX)
 
 # Analytics
 app.include_router(dashboard_router,  prefix=PREFIX)
+app.include_router(analytics_router,  prefix=PREFIX)
+
+# Manager panel
+app.include_router(manager_router,    prefix=PREFIX)
+
 
 # Extended routers (new modules)
 if _extended_routers:

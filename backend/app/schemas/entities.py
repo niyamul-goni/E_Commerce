@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import EmailStr, Field
+from pydantic import EmailStr, Field, field_validator
 
 from app.models.enums import OrderStatus, PaymentStatus, ShipmentStatus
 from app.schemas.common import ORMModel
@@ -16,6 +17,20 @@ class RegisterRequest(ORMModel):
     email: EmailStr
     phone: Optional[str] = Field(default=None, max_length=30)
     password: str = Field(min_length=8, max_length=128)
+    role: Optional[str] = Field(default="customer")  # "customer" | "manager"
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v.strip() == "":
+            return None
+        digits = re.sub(r"\D", "", v)
+        if len(digits) != 11:
+            raise ValueError("Phone number must be exactly 11 digits")
+        if not digits.startswith("0"):
+            raise ValueError("Phone number must start with 0 (e.g. 01775529619)")
+        return digits
+
 
 
 class LoginRequest(ORMModel):
