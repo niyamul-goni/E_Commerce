@@ -16,7 +16,7 @@ export default function ManagerOrdersPage() {
   const [expanded, setExpanded] = useState(null);
   const [filter,  setFilter]    = useState('all');
   const [search,  setSearch]    = useState('');
-  const [shipForm, setShipForm] = useState({ tracking_number:'', carrier:'', status:'shipped' });
+  const [shipForm, setShipForm] = useState({ tracking_number:'', carrier:'', status:'in_transit' });
   const [shipping, setShipping] = useState(null); // order being shipped
 
   async function load() {
@@ -35,7 +35,7 @@ export default function ManagerOrdersPage() {
     try {
       await createShipmentRequest({ order_id: orderId, ...shipForm });
       await updateOrderStatusRequest(orderId, 'shipped');
-      setShipping(null); setShipForm({ tracking_number:'', carrier:'', status:'shipped' });
+      setShipping(null); setShipForm({ tracking_number:'', carrier:'', status:'in_transit' });
       await load();
     } catch (e) { setError(e?.response?.data?.detail || 'Failed to create shipment.'); }
   }
@@ -125,7 +125,7 @@ export default function ManagerOrdersPage() {
                             <input className="field__control" value={shipForm.tracking_number} onChange={(e)=>setShipForm({...shipForm,tracking_number:e.target.value})} placeholder="1Z999…" /></div>
                           <div className="field"><label className="field__label">Ship Status</label>
                             <select className="field__control" value={shipForm.status} onChange={(e)=>setShipForm({...shipForm,status:e.target.value})}>
-                              <option value="processing">Processing</option><option value="shipped">Shipped</option>
+                              <option value="packed">Packed</option><option value="in_transit">In Transit</option><option value="delivered">Delivered</option>
                             </select></div>
                         </div>
                         <Button onClick={()=>handleShip(o.id)}>Confirm Shipment</Button>

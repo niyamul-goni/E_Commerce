@@ -99,7 +99,7 @@ export default function ManagerCouponsPage() {
             </div>
             <div className="field">
               <label className="field__label">Valid Until</label>
-              <input className="field__control" type="datetime-local" value={form.valid_until} onChange={(e) => setForm({...form,valid_until:e.target.value})} />
+              <input className="field__control" type="date" value={form.valid_until} onChange={(e) => setForm({...form,valid_until:e.target.value})} />
             </div>
             <div className="field">
               <label className="field__label">Description</label>

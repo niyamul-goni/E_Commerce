@@ -1,0 +1,3 @@
+Place ONE image file here for: Richman Polo Collar Tee
+Supported formats: .jpg, .jpeg, .png, .gif, .webp
+Filename can be anything (e.g., product.jpg)

@@ -373,14 +373,33 @@ def get_payment_by_order(order_id: int, db: Session = Depends(get_db), current_u
 def create_shipment_endpoint(shipment_in: dict, db: Session = Depends(get_db)):
     """Create a shipment for an order (admin only)."""
     from sqlalchemy import text as _text
+    
+    # Convert empty strings to None to avoid unique constraint violations on tracking_number
+    tn = shipment_in.get("tracking_number")
+    if tn == "":
+        tn = None
+        
+    carrier = shipment_in.get("carrier")
+    if carrier == "":
+        carrier = None
+        
+    # Frontend might send "status" instead of "shipment_status"
+    status_val = shipment_in.get("status") or shipment_in.get("shipment_status", "in_transit")
+    
     result = db.execute(_text(
         "INSERT INTO shipments (order_id, tracking_number, carrier_name, shipment_status) "
-        "VALUES (:oid, :tn, :carrier, :status) RETURNING id"
+        "VALUES (:oid, :tn, :carrier, :status) "
+        "ON CONFLICT (order_id) DO UPDATE SET "
+        "tracking_number = EXCLUDED.tracking_number, "
+        "carrier_name = EXCLUDED.carrier_name, "
+        "shipment_status = EXCLUDED.shipment_status, "
+        "updated_at = now() "
+        "RETURNING id"
     ), {
         "oid": shipment_in.get("order_id"),
-        "tn": shipment_in.get("tracking_number"),
-        "carrier": shipment_in.get("carrier"),
-        "status": shipment_in.get("shipment_status", "processing"),
+        "tn": tn,
+        "carrier": carrier,
+        "status": status_val,
     })
     db.commit()
     return {"id": result.fetchone()[0], "message": "Shipment created"}
@@ -937,4 +956,68 @@ def validate_coupon_code(payload: dict, db: Session = Depends(get_db)):
         "discount": round(discount, 2),
         "message": description or f"Coupon applied! You save {discount:.2f} BDT",
     }
+
+
+@coupon_validate_router.get("/list", dependencies=[Depends(require_admin)])
+def list_coupons_admin(db: Session = Depends(get_db)):
+    from sqlalchemy import text as _text
+    rows = db.execute(_text(
+        "SELECT id, code, coupon_type, value, min_order_amount, max_discount_amount, "
+        "max_uses, used_count, valid_until, is_active, description "
+        "FROM coupons ORDER BY created_at DESC"
+    )).fetchall()
+    return [
+        {
+            "id": r[0], "code": r[1], "coupon_type": r[2], "value": float(r[3]),
+            "min_order_amount": float(r[4]) if r[4] is not None else None,
+            "max_discount_amount": float(r[5]) if r[5] is not None else None,
+            "max_uses": r[6], "used_count": r[7],
+            "valid_until": r[8].isoformat() if r[8] else None,
+            "is_active": r[9], "description": r[10],
+        }
+        for r in rows
+    ]
+
+
+@coupon_validate_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
+def create_coupon_admin(payload: dict, db: Session = Depends(get_db)):
+    from sqlalchemy import text as _text
+    code = (payload.get("code") or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="Code is required")
+        
+    existing = db.execute(_text("SELECT id FROM coupons WHERE code = :code"), {"code": code}).fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail="Coupon code already exists")
+        
+    result = db.execute(_text("""
+        INSERT INTO coupons (
+            code, coupon_type, value, min_order_amount, max_discount_amount,
+            max_uses, valid_until, description, is_active
+        ) VALUES (
+            :code, :type, :value, :min_amt, :max_disc, :max_uses, :valid, :desc, :active
+        ) RETURNING id
+    """), {
+        "code": code,
+        "type": payload.get("coupon_type", "percentage"),
+        "value": payload.get("value", 0),
+        "min_amt": payload.get("min_order_amount"),
+        "max_disc": payload.get("max_discount_amount"),
+        "max_uses": payload.get("max_uses"),
+        "valid": payload.get("valid_until"),
+        "desc": payload.get("description"),
+        "active": payload.get("is_active", True)
+    })
+    db.commit()
+    return {"id": result.fetchone()[0], "message": "Coupon created"}
+
+
+@coupon_validate_router.put("/{coupon_id}", dependencies=[Depends(require_admin)])
+def update_coupon_admin(coupon_id: int, payload: dict, db: Session = Depends(get_db)):
+    from sqlalchemy import text as _text
+    if "is_active" in payload:
+        db.execute(_text("UPDATE coupons SET is_active = :active, updated_at = now() WHERE id = :id"), 
+                   {"active": payload["is_active"], "id": coupon_id})
+        db.commit()
+    return {"id": coupon_id, "message": "Coupon updated"}
 

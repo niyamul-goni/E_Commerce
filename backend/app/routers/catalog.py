@@ -177,6 +177,13 @@ def _product_row_to_dict(row) -> dict:
         "created_at":      row[13].isoformat() if row[13] else None,
         "updated_at":      row[14].isoformat() if row[14] else None,
         "image_url":       row[15],
+        "discount_price":  float(row[16]) if row[16] is not None else None,
+        "short_description": row[17] or "",
+        "tags":            row[18] or "",
+        "avg_rating":      float(row[19]) if row[19] is not None else None,
+        "review_count":    int(row[20]) if row[20] is not None else 0,
+        "is_trending":     bool(row[21]) if row[21] is not None else False,
+        "is_new_arrival":  bool(row[22]) if row[22] is not None else False,
     }
 
 
@@ -203,7 +210,24 @@ _BASE_QUERY = """
         p.is_featured,
         p.created_at,
         p.updated_at,
-        (SELECT pi.image_url FROM product_images pi WHERE pi.product_id = p.id AND pi.is_primary = true LIMIT 1) AS image_url
+        (SELECT pi.image_url FROM product_images pi WHERE pi.product_id = p.id AND pi.is_primary = true LIMIT 1) AS image_url,
+        p.discount_price,
+        p.short_description,
+        p.tags,
+        COALESCE((
+            SELECT ROUND(AVG(r.rating)::numeric, 1)
+            FROM reviews r
+            JOIN product_variants rpv ON rpv.id = r.variant_id
+            WHERE rpv.product_id = p.id
+        ), NULL)         AS avg_rating,
+        COALESCE((
+            SELECT COUNT(r.id)
+            FROM reviews r
+            JOIN product_variants rpv ON rpv.id = r.variant_id
+            WHERE rpv.product_id = p.id
+        ), 0)            AS review_count,
+        p.is_trending,
+        p.is_new_arrival
     FROM products p
     LEFT JOIN brands b        ON b.id  = p.brand_id
     LEFT JOIN subcategories sc ON sc.id = p.subcategory_id
@@ -297,13 +321,87 @@ def create_product(product_in: ProductCreate, db: Session = Depends(get_db)):
     return product.create(db, obj_in=product_in)
 
 
+@products_router.get("/featured", tags=["products"])
+def get_featured_products(db: Session = Depends(get_db), limit: int = Query(12, le=50)):
+    """Return featured products."""
+    sql = _BASE_QUERY + " AND p.is_featured = true ORDER BY p.updated_at DESC LIMIT :limit"
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+    return [_product_row_to_dict(r) for r in rows]
+
+
+@products_router.get("/trending", tags=["products"])
+def get_trending_products(db: Session = Depends(get_db), limit: int = Query(12, le=50)):
+    """Return trending products."""
+    sql = _BASE_QUERY + " AND p.is_trending = true ORDER BY p.updated_at DESC LIMIT :limit"
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+    return [_product_row_to_dict(r) for r in rows]
+
+
+@products_router.get("/new-arrivals", tags=["products"])
+def get_new_arrival_products(db: Session = Depends(get_db), limit: int = Query(12, le=50)):
+    """Return newest products."""
+    sql = _BASE_QUERY + " AND p.is_new_arrival = true ORDER BY p.created_at DESC LIMIT :limit"
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+    return [_product_row_to_dict(r) for r in rows]
+
+
+@products_router.get("/top-rated", tags=["products"])
+def get_top_rated_products(db: Session = Depends(get_db), limit: int = Query(12, le=50)):
+    """Return top-rated products (by average review score)."""
+    sql = _BASE_QUERY + """
+        AND EXISTS (
+            SELECT 1 FROM reviews rv
+            JOIN product_variants rpv ON rpv.id = rv.variant_id
+            WHERE rpv.product_id = p.id
+        )
+        ORDER BY (
+            SELECT AVG(rv.rating)
+            FROM reviews rv
+            JOIN product_variants rpv ON rpv.id = rv.variant_id
+            WHERE rpv.product_id = p.id
+        ) DESC NULLS LAST
+        LIMIT :limit
+    """
+    rows = db.execute(text(sql), {"limit": limit}).fetchall()
+    return [_product_row_to_dict(r) for r in rows]
+
+
 @products_router.get("/{product_id}", tags=["products"])
 def get_product(product_id: int, db: Session = Depends(get_db)):
     sql = _BASE_QUERY + " AND p.id = :pid"
     row = db.execute(text(sql), {"pid": product_id}).fetchone()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return _product_row_to_dict(row)
+    product_dict = _product_row_to_dict(row)
+    # Attach full image gallery
+    images = db.execute(text(
+        "SELECT id, image_url, alt_text, is_primary, sort_order "
+        "FROM product_images WHERE product_id = :pid "
+        "ORDER BY is_primary DESC, sort_order ASC, id ASC"
+    ), {"pid": product_id}).fetchall()
+    product_dict["images"] = [
+        {"id": im[0], "image_url": im[1], "alt_text": im[2], "is_primary": im[3], "sort_order": im[4]}
+        for im in images
+    ]
+    return product_dict
+
+
+@products_router.get("/{product_id}/related", tags=["products"])
+def get_related_products(product_id: int, db: Session = Depends(get_db), limit: int = Query(8, le=20)):
+    """Return products in the same category or brand, excluding this product."""
+    sql = _BASE_QUERY + """
+        AND p.id != :pid
+        AND (
+            sc.category_id = (SELECT sc2.category_id FROM products p2
+                              LEFT JOIN subcategories sc2 ON sc2.id = p2.subcategory_id
+                              WHERE p2.id = :pid)
+            OR p.brand_id = (SELECT p3.brand_id FROM products p3 WHERE p3.id = :pid)
+        )
+        ORDER BY p.is_featured DESC, RANDOM()
+        LIMIT :limit
+    """
+    rows = db.execute(text(sql), {"pid": product_id, "limit": limit}).fetchall()
+    return [_product_row_to_dict(r) for r in rows]
 
 
 @products_router.put(

@@ -188,12 +188,15 @@ def get_inventory_levels(db: Session = Depends(get_db)):
 def list_all_reviews(db: Session = Depends(get_db)):
     """All reviews across all products, with customer email and reply status."""
     rows = db.execute(text("""
-        SELECT r.id, r.customer_id, r.product_id, r.rating, r.comment, r.created_at,
+        SELECT r.id, r.customer_id, p.id AS product_id, r.rating,
+               COALESCE(r.title, '') || CASE WHEN r.body IS NOT NULL THEN ': ' || r.body ELSE '' END AS comment,
+               r.created_at,
                c.email AS customer_email, p.name AS product_name,
-               rr.reply_text, rr.id AS reply_id
+               rr.body AS reply_text, rr.id AS reply_id
         FROM reviews r
+        JOIN product_variants pv ON pv.id = r.variant_id
+        JOIN products p ON p.id = pv.product_id
         LEFT JOIN customers c ON c.id = r.customer_id
-        LEFT JOIN products p  ON p.id = r.product_id
         LEFT JOIN review_replies rr ON rr.review_id = r.id
         ORDER BY r.created_at DESC
     """)).fetchall()
@@ -222,11 +225,11 @@ def reply_to_review(review_id: int, payload: dict, db: Session = Depends(get_db)
 
     if existing:
         db.execute(text(
-            "UPDATE review_replies SET reply_text=:text, updated_at=now() WHERE review_id=:rid"
+            "UPDATE review_replies SET body=:text, updated_at=now() WHERE review_id=:rid"
         ), {"text": reply_text, "rid": review_id})
     else:
         db.execute(text(
-            "INSERT INTO review_replies (review_id, admin_id, reply_text) VALUES (:rid, :aid, :text)"
+            "INSERT INTO review_replies (review_id, admin_id, body) VALUES (:rid, :aid, :text)"
         ), {"rid": review_id, "aid": current_user.id, "text": reply_text})
 
     db.commit()

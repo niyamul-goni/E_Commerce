@@ -4,14 +4,14 @@ import Button from '../components/Button';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import Loader from '../components/Loader';
-import PageHeader from '../components/PageHeader';
 import ProductCard from '../components/ProductCard';
-import StatCard from '../components/StatCard';
 import { useAuth } from '../context/AuthContext';
 import {
   getBrandsRequest,
   getCategoriesRequest,
-  getProductsRequest,
+  getFeaturedProductsRequest,
+  getTrendingProductsRequest,
+  getNewArrivalsRequest,
 } from '../services/catalogService';
 import { addToCartRequest } from '../services/commerceService';
 
@@ -22,7 +22,9 @@ export default function HomePage() {
   const [error,      setError]      = useState('');
   const [categories, setCategories] = useState([]);
   const [brands,     setBrands]     = useState([]);
-  const [products,   setProducts]   = useState([]);
+  const [featured,   setFeatured]   = useState([]);
+  const [trending,   setTrending]   = useState([]);
+  const [newArrivals, setNewArrivals] = useState([]);
   const [addingId,   setAddingId]   = useState(null);
   const [cartMsg,    setCartMsg]    = useState('');
 
@@ -33,16 +35,20 @@ export default function HomePage() {
       try {
         setLoading(true);
         setError('');
-        const [catData, brandData, productData] = await Promise.all([
+        const [catData, brandData, featuredData, trendingData, newData] = await Promise.all([
           getCategoriesRequest(),
           getBrandsRequest(),
-          getProductsRequest({ limit: 8 }),
+          getFeaturedProductsRequest(8),
+          getTrendingProductsRequest(8),
+          getNewArrivalsRequest(8),
         ]);
 
         if (!active) return;
         setCategories(catData);
         setBrands(brandData);
-        setProducts(productData.slice(0, 8));
+        setFeatured(featuredData);
+        setTrending(trendingData);
+        setNewArrivals(newData);
       } catch (loadError) {
         if (!active) return;
         setError(loadError?.response?.data?.detail || 'Failed to load home page data.');
@@ -70,8 +76,6 @@ export default function HomePage() {
     }
   }
 
-  const featuredCategories = categories.slice(0, 6);
-
   if (loading) return <Loader label="Preparing storefront" />;
   if (error)   return <ErrorState message={error} onRetry={() => window.location.reload()} />;
 
@@ -81,13 +85,13 @@ export default function HomePage() {
       <section className="hero card">
         <div className="hero__content">
           <p className="eyebrow">🇧🇩 Made in Bangladesh · Dhaka Fashion Hub</p>
-          <h1>Discover Bangladeshi Fashion Brands</h1>
-          <p>
+          <h1>Discover Bangladeshi Fashion</h1>
+          <p className="hero__subtitle">
             Shop Infinity, Richman, Yellow, Easy, Sailor, Ecstasy, Westecs & Texmart —
             authentic Bangladeshi fashion at real BDT prices.
           </p>
           <div className="hero__actions">
-            <Button id="hero-browse-btn" onClick={() => navigate('/products')}>Shop Now</Button>
+            <Button id="hero-browse-btn" onClick={() => navigate('/products')}>Shop All Products</Button>
             <Link
               id="hero-auth-btn"
               className="button button--secondary"
@@ -96,82 +100,163 @@ export default function HomePage() {
               {isAuthenticated ? 'My Orders' : 'Sign In'}
             </Link>
           </div>
-        </div>
-        <div className="hero__panel">
-          <StatCard label="Products"   value={products.length}   hint="Live from Supabase" />
-          <StatCard label="Categories" value={categories.length} hint="Organized catalog" />
-          <StatCard label="Brands"     value={brands.length}     hint="Premium labels" />
+          <div className="hero__stats">
+            <div className="hero__stat">
+              <span className="hero__stat-value">{featured.length + trending.length + newArrivals.length}+</span>
+              <span className="hero__stat-label">Products</span>
+            </div>
+            <div className="hero__stat">
+              <span className="hero__stat-value">{categories.length}</span>
+              <span className="hero__stat-label">Categories</span>
+            </div>
+            <div className="hero__stat">
+              <span className="hero__stat-value">{brands.length}</span>
+              <span className="hero__stat-label">Brands</span>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* ── Featured Products ── */}
-      <section className="section-grid">
-        <div>
-          <PageHeader
-            title="Featured products"
-            subtitle="Curated picks from the live Supabase catalog."
-          />
-          {cartMsg && <p className="inline-message" style={{ marginBottom: '1rem' }}>{cartMsg}</p>}
-          {products.length ? (
-            <div className="cards-grid">
-              {products.map((product) => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  onAddToCart={handleAddToCart}
-                  loading={addingId === product.id}
-                />
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="No products yet" message="Add sample products from the admin panel." />
-          )}
-        </div>
+      {cartMsg && <p className="inline-message" style={{ marginBottom: '0.5rem' }}>{cartMsg}</p>}
 
-        <aside className="sidebar-stack">
-          <PageHeader title="Categories" subtitle="Browse the full catalog by category." />
-          <div className="chip-grid">
-            {featuredCategories.map((category) => (
+      {/* ── Featured Products ── */}
+      {featured.length > 0 && (
+        <section className="home-section">
+          <div className="home-section__header">
+            <div>
+              <h2 className="home-section__title">Featured Products</h2>
+              <p className="home-section__subtitle">Hand-picked selections from our curated catalog</p>
+            </div>
+            <Link className="button button--secondary" to="/products">View All →</Link>
+          </div>
+          <div className="products-grid">
+            {featured.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onAddToCart={handleAddToCart}
+                loading={addingId === product.id}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Categories Showcase ── */}
+      {categories.length > 0 && (
+        <section className="home-section">
+          <div className="home-section__header">
+            <div>
+              <h2 className="home-section__title">Shop by Category</h2>
+              <p className="home-section__subtitle">Browse our organized fashion catalog</p>
+            </div>
+          </div>
+          <div className="category-showcase">
+            {categories.map((category) => (
               <Link
                 key={category.id}
                 id={`home-cat-${category.id}`}
-                className="category-chip"
+                className="category-showcase__card"
                 to={`/products?category_id=${category.id}`}
               >
-                {category.name}
+                <div className="category-showcase__icon">
+                  {category.name.includes('Men') ? '👔' :
+                   category.name.includes('Women') ? '👗' :
+                   category.name.includes('Kid') ? '🧸' :
+                   category.name.includes('Foot') ? '👟' :
+                   category.name.includes('Access') ? '⌚' : '🛍️'}
+                </div>
+                <h3 className="category-showcase__name">{category.name}</h3>
+                <p className="category-showcase__desc">{category.description || 'Explore collection'}</p>
+                <span className="category-showcase__link">Browse →</span>
               </Link>
             ))}
           </div>
+        </section>
+      )}
 
-          {brands.length > 0 && (
-            <>
-              <PageHeader title="Brands" subtitle="Shop your favourite fashion labels." />
-              <div className="chip-grid">
-                {brands.map((b) => (
-                  <Link
-                    key={b.id}
-                    id={`home-brand-${b.id}`}
-                    className="category-chip"
-                    to={`/products?brand_id=${b.id}`}
-                  >
-                    {b.name}
-                  </Link>
-                ))}
-              </div>
-            </>
-          )}
-
-          <div className="card callout">
-            <h3>45-table normalized schema</h3>
-            <p>
-              Supports brands, variants, inventory, coupons, addresses, reviews, wishlists
-              and the full commerce lifecycle from cart to delivered shipment.
-            </p>
-            <Link className="button button--secondary" to="/reviews">
-              Explore reviews
-            </Link>
+      {/* ── Trending Products ── */}
+      {trending.length > 0 && (
+        <section className="home-section">
+          <div className="home-section__header">
+            <div>
+              <h2 className="home-section__title">🔥 Trending Now</h2>
+              <p className="home-section__subtitle">What everyone&apos;s buying this week</p>
+            </div>
+            <Link className="button button--secondary" to="/products">View All →</Link>
           </div>
-        </aside>
+          <div className="products-grid">
+            {trending.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onAddToCart={handleAddToCart}
+                loading={addingId === product.id}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Brand Showcase ── */}
+      {brands.length > 0 && (
+        <section className="home-section">
+          <div className="home-section__header">
+            <div>
+              <h2 className="home-section__title">Premium Brands</h2>
+              <p className="home-section__subtitle">Shop your favourite Bangladeshi fashion labels</p>
+            </div>
+          </div>
+          <div className="brand-showcase">
+            {brands.map((b) => (
+              <Link
+                key={b.id}
+                id={`home-brand-${b.id}`}
+                className="brand-showcase__card"
+                to={`/products?brand_id=${b.id}`}
+              >
+                <span className="brand-showcase__name">{b.name}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── New Arrivals ── */}
+      {newArrivals.length > 0 && (
+        <section className="home-section">
+          <div className="home-section__header">
+            <div>
+              <h2 className="home-section__title">✨ New Arrivals</h2>
+              <p className="home-section__subtitle">Fresh styles just dropped into the store</p>
+            </div>
+            <Link className="button button--secondary" to="/products">View All →</Link>
+          </div>
+          <div className="products-grid">
+            {newArrivals.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onAddToCart={handleAddToCart}
+                loading={addingId === product.id}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── CTA Banner ── */}
+      <section className="cta-banner card">
+        <div className="cta-banner__content">
+          <h2>Ready to upgrade your wardrobe?</h2>
+          <p>Join thousands of fashion-forward shoppers discovering authentic Bangladeshi brands.</p>
+          <div className="cta-banner__actions">
+            <Button onClick={() => navigate('/products')}>Explore All Products</Button>
+            {!isAuthenticated && (
+              <Link className="button button--secondary" to="/register">Create Account</Link>
+            )}
+          </div>
+        </div>
       </section>
     </div>
   );

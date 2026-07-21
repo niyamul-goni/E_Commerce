@@ -71,25 +71,16 @@ export default function ProductsPage() {
     loadReferenceData();
   }, []);
 
-  // Auto-search whenever URL has any filter param
+  // Auto-search on mount — always load products
   useEffect(() => {
-    const hasParams =
-      searchParams.get('q') ||
-      searchParams.get('category_id') ||
-      searchParams.get('brand_id') ||
-      searchParams.get('size') ||
-      searchParams.get('min_price') ||
-      searchParams.get('max_price');
-    if (hasParams) {
-      performSearch({
-        query:       searchParams.get('q')           || '',
-        category_id: searchParams.get('category_id') || '',
-        brand_id:    searchParams.get('brand_id')    || '',
-        size:        searchParams.get('size')        || '',
-        min_price:   searchParams.get('min_price')   || '',
-        max_price:   searchParams.get('max_price')   || '',
-      });
-    }
+    performSearch({
+      query:       searchParams.get('q')           || '',
+      category_id: searchParams.get('category_id') || '',
+      brand_id:    searchParams.get('brand_id')    || '',
+      size:        searchParams.get('size')        || '',
+      min_price:   searchParams.get('min_price')   || '',
+      max_price:   searchParams.get('max_price')   || '',
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

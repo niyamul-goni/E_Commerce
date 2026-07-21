@@ -1,0 +1,3 @@
+Place ONE image file here for: Infinity Linen Summer Shirt
+Supported formats: .jpg, .jpeg, .png, .gif, .webp
+Filename can be anything (e.g., product.jpg)

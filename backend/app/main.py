@@ -46,6 +46,7 @@ from app.routers import (
 )
 from app.routers.auth import manager_router
 from app.routers.analytics import router as analytics_router
+from app.routers.images import router as images_router
 
 
 # Extended routers disabled — they reference a normalized schema
@@ -129,6 +130,7 @@ app.include_router(subcategories_router, prefix=PREFIX)
 app.include_router(collections_router,  prefix=PREFIX)
 app.include_router(suppliers_router,    prefix=PREFIX)
 app.include_router(products_router,     prefix=PREFIX)
+app.include_router(images_router,       prefix=PREFIX)
 
 # Sales
 app.include_router(orders_router,      prefix=PREFIX)

@@ -1,0 +1,3 @@
+Place ONE image file here for: Texmart Raw Denim Jeans
+Supported formats: .jpg, .jpeg, .png, .gif, .webp
+Filename can be anything (e.g., product.jpg)

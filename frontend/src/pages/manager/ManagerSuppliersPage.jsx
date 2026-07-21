@@ -10,7 +10,7 @@ import {
   deleteSupplierRequest,
 } from '../../services/catalogService';
 
-const EMPTY = { name:'', contact_person:'', email:'', phone:'', address:'', country:'Bangladesh' };
+const EMPTY = { name:'', contact_email:'', contact_phone:'', address:'' };
 
 export default function ManagerSuppliersPage() {
   const [loading, setLoading]   = useState(true);
@@ -29,7 +29,7 @@ export default function ManagerSuppliersPage() {
 
   function startEdit(s) {
     setEditId(s.id);
-    setForm({ name:s.name, contact_person:s.contact_person||'', email:s.email||'', phone:s.phone||'', address:s.address||'', country:s.country||'Bangladesh' });
+    setForm({ name:s.name, contact_email:s.contact_email||'', contact_phone:s.contact_phone||'', address:s.address||'' });
   }
   function cancel() { setEditId(null); setForm(EMPTY); }
 
@@ -37,11 +37,27 @@ export default function ManagerSuppliersPage() {
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
+    
+    // Convert empty strings to null to avoid Pydantic validation errors (e.g., EmailStr requires null, not "")
+    const payload = {
+      name: form.name,
+      contact_email: form.contact_email ? form.contact_email : null,
+      contact_phone: form.contact_phone ? form.contact_phone : null,
+      address: form.address ? form.address : null
+    };
+
     try {
-      editId ? await updateSupplierRequest(editId, form) : await createSupplierRequest(form);
+      editId ? await updateSupplierRequest(editId, payload) : await createSupplierRequest(payload);
       cancel(); await load();
-    } catch (e) { setError(e?.response?.data?.detail || 'Save failed.'); }
-    finally { setSaving(false); }
+    } catch (e) {
+      let msg = 'Save failed.';
+      if (e?.response?.data?.detail) {
+        msg = typeof e.response.data.detail === 'string' 
+          ? e.response.data.detail 
+          : e.response.data.detail[0]?.msg || JSON.stringify(e.response.data.detail);
+      }
+      setError(msg);
+    } finally { setSaving(false); }
   }
 
   async function handleDelete(id) {
@@ -65,10 +81,8 @@ export default function ManagerSuppliersPage() {
           <h2 className="mgr-form-card__title">{editId ? 'Edit Supplier' : 'New Supplier'}</h2>
           <form onSubmit={handleSave} style={{ display:'grid', gap:'0.75rem' }}>
             <FormField label="Company Name" value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} />
-            <FormField label="Contact Person" value={form.contact_person} onChange={(e)=>setForm({...form,contact_person:e.target.value})} />
-            <FormField label="Email" type="email" value={form.email} onChange={(e)=>setForm({...form,email:e.target.value})} />
-            <FormField label="Phone" value={form.phone} onChange={(e)=>setForm({...form,phone:e.target.value})} />
-            <FormField label="Country" value={form.country} onChange={(e)=>setForm({...form,country:e.target.value})} />
+            <FormField label="Email" type="email" value={form.contact_email} onChange={(e)=>setForm({...form,contact_email:e.target.value})} />
+            <FormField label="Phone" value={form.contact_phone} onChange={(e)=>setForm({...form,contact_phone:e.target.value})} />
             <FormField label="Address" as="textarea" rows="2" value={form.address} onChange={(e)=>setForm({...form,address:e.target.value})} />
             <div style={{display:'flex',gap:'0.5rem'}}>
               <Button type="submit" loading={saving}>{editId?'Update':'Create'}</Button>
@@ -80,14 +94,13 @@ export default function ManagerSuppliersPage() {
         <div className="card mgr-table-card">
           <div className="mgr-table-wrap">
             <table className="mgr-table">
-              <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Country</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Company</th><th>Email</th><th>Phone</th><th>Actions</th></tr></thead>
               <tbody>
                 {suppliers.map((s)=>(
                   <tr key={s.id}>
                     <td><strong>{s.name}</strong></td>
-                    <td className="muted">{s.contact_person||'—'}</td>
-                    <td className="muted">{s.email||'—'}</td>
-                    <td className="muted">{s.country||'—'}</td>
+                    <td className="muted">{s.contact_email||'—'}</td>
+                    <td className="muted">{s.contact_phone||'—'}</td>
                     <td>
                       <div style={{display:'flex',gap:'0.4rem'}}>
                         <button className="mgr-btn" onClick={()=>startEdit(s)}>✏️</button>

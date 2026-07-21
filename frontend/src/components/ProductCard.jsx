@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Button from './Button';
 import { formatCurrency } from '../utils/format';
+
+const PLACEHOLDER_IMG = 'https://picsum.photos/seed/placeholder/400/500';
 
 export default function ProductCard({
   product,
@@ -10,10 +13,17 @@ export default function ProductCard({
   loading = false,
 }) {
   const inStock = product.stock_quantity > 0;
+  const [imgError, setImgError] = useState(false);
+  const [imgLoaded, setImgLoaded] = useState(false);
+
+  const imageUrl = (!imgError && product.image_url) ? product.image_url : PLACEHOLDER_IMG;
+  const hasDiscount = product.discount_price && product.discount_price < product.price;
+  const discountPercent = hasDiscount
+    ? Math.round(((product.price - product.discount_price) / product.price) * 100)
+    : 0;
 
   return (
     <article className="product-card card">
-
       {/* Wishlist heart */}
       {onWishlist && (
         <button
@@ -27,23 +37,84 @@ export default function ProductCard({
         </button>
       )}
 
+      {/* Badges */}
+      <div className="product-card__badges">
+        {hasDiscount && (
+          <span className="product-card__badge product-card__badge--sale">-{discountPercent}%</span>
+        )}
+        {product.is_new_arrival && (
+          <span className="product-card__badge product-card__badge--new">NEW</span>
+        )}
+        {product.is_trending && !product.is_new_arrival && (
+          <span className="product-card__badge product-card__badge--trending">TRENDING</span>
+        )}
+        {!inStock && (
+          <span className="product-card__badge product-card__badge--oos">SOLD OUT</span>
+        )}
+      </div>
+
+      {/* Image */}
+      <Link to={`/products/${product.id}`} className="product-card__image-link">
+        <div className="product-card__image-wrap">
+          {!imgLoaded && <div className="product-card__image-skeleton" />}
+          <img
+            src={imageUrl}
+            alt={product.name}
+            className={`product-card__image${imgLoaded ? ' loaded' : ''}`}
+            loading="lazy"
+            onLoad={() => setImgLoaded(true)}
+            onError={() => setImgError(true)}
+          />
+        </div>
+      </Link>
+
       <div className="product-card__body">
         {product.category_name && (
           <p className="product-card__category">{product.category_name.toUpperCase()}</p>
         )}
-        <h3 className="product-card__title">{product.name}</h3>
+        <Link to={`/products/${product.id}`} className="product-card__title-link">
+          <h3 className="product-card__title">{product.name}</h3>
+        </Link>
         {product.brand_name && (
           <p className="product-card__brand">{product.brand_name}</p>
         )}
+
+        {/* Rating */}
+        {product.avg_rating && (
+          <div className="product-card__rating">
+            <span className="product-card__stars">
+              {'★'.repeat(Math.round(product.avg_rating))}
+              {'☆'.repeat(5 - Math.round(product.avg_rating))}
+            </span>
+            <span className="product-card__rating-text">
+              {product.avg_rating} ({product.review_count})
+            </span>
+          </div>
+        )}
+
         <p className="product-card__desc">
-          {product.description
-            ? product.description.length > 80
-              ? product.description.slice(0, 80) + '…'
+          {product.short_description || (product.description
+            ? product.description.length > 60
+              ? product.description.slice(0, 60) + '…'
               : product.description
-            : ''}
+            : '')}
         </p>
+
         <div className="product-card__meta">
-          <span className="product-card__price">{formatCurrency(product.price)}</span>
+          <div className="product-card__price-group">
+            {hasDiscount ? (
+              <>
+                <span className="product-card__price product-card__price--sale">
+                  {formatCurrency(product.discount_price)}
+                </span>
+                <span className="product-card__price product-card__price--original">
+                  {formatCurrency(product.price)}
+                </span>
+              </>
+            ) : (
+              <span className="product-card__price">{formatCurrency(product.price)}</span>
+            )}
+          </div>
           <span className={`product-card__stock${inStock ? '' : ' product-card__stock--out'}`}>
             {inStock ? 'In stock' : 'Out of stock'}
           </span>

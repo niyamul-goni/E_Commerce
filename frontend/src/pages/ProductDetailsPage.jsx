@@ -3,8 +3,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import Button from '../components/Button';
 import ErrorState from '../components/ErrorState';
 import Loader from '../components/Loader';
+import ProductCard from '../components/ProductCard';
 import { useAuth } from '../context/AuthContext';
-import { getProductRequest, getProductVariantsRequest } from '../services/catalogService';
+import {
+  getProductRequest,
+  getProductVariantsRequest,
+  getRelatedProductsRequest,
+} from '../services/catalogService';
 import {
   addToCartRequest,
   addToWishlistRequest,
@@ -12,6 +17,8 @@ import {
   getReviewsByProductRequest,
 } from '../services/commerceService';
 import { formatCurrency, formatDate } from '../utils/format';
+
+const PLACEHOLDER_IMG = 'https://picsum.photos/seed/placeholder/600/800';
 
 // ── Star Rating ───────────────────────────────────────────────────────────────
 function StarRating({ value, onChange, readOnly = false }) {
@@ -58,6 +65,7 @@ export default function ProductDetailsPage() {
   const [product,          setProduct]          = useState(null);
   const [variants,         setVariants]         = useState([]);
   const [reviews,          setReviews]          = useState([]);
+  const [relatedProducts,  setRelatedProducts]  = useState([]);
   const [selectedVariant,  setSelectedVariant]  = useState(null);
   const [quantity,         setQuantity]         = useState(1);
   const [cartMessage,      setCartMessage]      = useState('');
@@ -65,6 +73,7 @@ export default function ProductDetailsPage() {
   const [reviewForm,       setReviewForm]       = useState({ rating: 5, comment: '' });
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError,      setReviewError]      = useState('');
+  const [activeImageIdx,   setActiveImageIdx]   = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -72,15 +81,18 @@ export default function ProductDetailsPage() {
       try {
         setLoading(true);
         setError('');
-        const [productData, variantData, reviewData] = await Promise.all([
+        const [productData, variantData, reviewData, relatedData] = await Promise.all([
           getProductRequest(productId),
           getProductVariantsRequest(productId).catch(() => []),
           getReviewsByProductRequest(productId).catch(() => []),
+          getRelatedProductsRequest(productId).catch(() => []),
         ]);
         if (!active) return;
         setProduct(productData);
         setVariants(variantData);
         setReviews(reviewData);
+        setRelatedProducts(relatedData);
+        setActiveImageIdx(0);
         // Pre-select first in-stock variant
         const firstAvailable = variantData.find((v) => v.available_stock > 0) || variantData[0];
         if (firstAvailable) setSelectedVariant(firstAvailable);
@@ -103,6 +115,13 @@ export default function ProductDetailsPage() {
     ? selectedVariant.price_override
     : product?.price;
 
+  // Build gallery images from product data
+  const galleryImages = product?.images?.length
+    ? product.images.map((img) => img.image_url)
+    : product?.image_url
+      ? [product.image_url]
+      : [PLACEHOLDER_IMG];
+
   // Derive unique sizes and colors for grouped variant selector
   const uniqueSizes  = [...new Map(variants.map((v) => [v.size_name, v])).values()].filter((v) => v.size_name);
   const uniqueColors = [...new Map(variants.map((v) => [v.color_id, v])).values()].filter((v) => v.color_id);
@@ -116,7 +135,7 @@ export default function ProductDetailsPage() {
         product_id: product.id,
         quantity,
       });
-      setCartMessage('✓ Added to cart!');
+      setCartMessage('Added to cart!');
     } catch (err) {
       setCartMessage(err?.response?.data?.detail || 'Unable to add this item to cart.');
     }
@@ -128,7 +147,7 @@ export default function ProductDetailsPage() {
     try {
       setWishlistMsg('');
       await addToWishlistRequest(selectedVariant.id);
-      setWishlistMsg('♥ Saved to wishlist!');
+      setWishlistMsg('Saved to wishlist!');
     } catch (err) {
       setWishlistMsg(err?.response?.data?.detail || 'Could not add to wishlist.');
     }
@@ -160,9 +179,11 @@ export default function ProductDetailsPage() {
   if (error)   return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   if (!product) return <ErrorState message="Product not found." />;
 
-  const avgRating = reviews.length
+  const avgRating = product.avg_rating || (reviews.length
     ? (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1)
-    : null;
+    : null);
+
+  const hasDiscount = product.discount_price && product.discount_price < product.price;
 
   return (
     <div className="page-stack">
@@ -181,14 +202,40 @@ export default function ProductDetailsPage() {
 
       {/* ── Main product layout ── */}
       <div className="product-detail">
-        {/* Left: image */}
-        <div className="product-detail__image">
-          {(selectedVariant?.image_url || product.image_url) ? (
-            <img src={selectedVariant?.image_url || product.image_url} alt={product.name} />
-          ) : (
-            <div className="product-detail__image-placeholder">
-              <span>🛍️</span>
-              <p>Product Image</p>
+        {/* Left: image gallery */}
+        <div className="product-detail__gallery">
+          <div className="product-detail__image-main">
+            {galleryImages[activeImageIdx] ? (
+              <img
+                src={galleryImages[activeImageIdx]}
+                alt={product.name}
+                className="product-detail__image"
+                onError={(e) => { e.target.src = PLACEHOLDER_IMG; }}
+              />
+            ) : (
+              <div className="product-detail__image-placeholder">
+                <span>🛍️</span>
+                <p>Product Image</p>
+              </div>
+            )}
+            {hasDiscount && (
+              <span className="product-detail__sale-badge">
+                -{Math.round(((product.price - product.discount_price) / product.price) * 100)}% OFF
+              </span>
+            )}
+          </div>
+          {galleryImages.length > 1 && (
+            <div className="product-detail__thumbnails">
+              {galleryImages.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`product-detail__thumb${idx === activeImageIdx ? ' active' : ''}`}
+                  onClick={() => setActiveImageIdx(idx)}
+                >
+                  <img src={img} alt={`${product.name} thumbnail ${idx + 1}`} />
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -201,25 +248,50 @@ export default function ProductDetailsPage() {
           <h1 className="product-detail__name">{product.name}</h1>
 
           <div className="product-detail__price-row">
-            <span className="product-detail__price">{formatCurrency(displayPrice)}</span>
+            <div className="product-detail__price-group">
+              {hasDiscount ? (
+                <>
+                  <span className="product-detail__price product-detail__price--sale">
+                    {formatCurrency(product.discount_price)}
+                  </span>
+                  <span className="product-detail__price product-detail__price--original">
+                    {formatCurrency(product.price)}
+                  </span>
+                  <span className="product-detail__save-badge">
+                    Save {formatCurrency(product.price - product.discount_price)}
+                  </span>
+                </>
+              ) : (
+                <span className="product-detail__price">{formatCurrency(displayPrice)}</span>
+              )}
+            </div>
             <span className={`stock-badge${inStock ? '' : ' stock-badge--out'}`}>
               {inStock
                 ? selectedVariant
-                  ? `✓ In Stock (${selectedVariant.available_stock})`
-                  : `✓ In Stock (${product.stock_quantity})`
-                : '✗ Out of Stock'}
+                  ? `In Stock (${selectedVariant.available_stock})`
+                  : `In Stock (${product.stock_quantity})`
+                : 'Out of Stock'}
             </span>
           </div>
 
           {avgRating && (
             <div className="product-detail__rating">
               {'★'.repeat(Math.round(Number(avgRating)))}{'☆'.repeat(5 - Math.round(Number(avgRating)))}
-              <span> {avgRating} ({reviews.length} review{reviews.length !== 1 ? 's' : ''})</span>
+              <span> {avgRating} ({product.review_count || reviews.length} review{(product.review_count || reviews.length) !== 1 ? 's' : ''})</span>
             </div>
           )}
 
           {product.description && (
             <p className="product-detail__desc">{product.description}</p>
+          )}
+
+          {/* Tags */}
+          {product.tags && (
+            <div className="product-detail__tags">
+              {product.tags.split(',').map((tag) => (
+                <span key={tag.trim()} className="product-detail__tag">{tag.trim()}</span>
+              ))}
+            </div>
           )}
 
           {/* ── Variant Selectors ── */}
@@ -241,7 +313,6 @@ export default function ProductDetailsPage() {
                         variant={v}
                         selected={selectedVariant?.color_id === v.color_id}
                         onClick={() => {
-                          // Find the variant matching this color + current size
                           const match = variants.find(
                             (x) =>
                               x.color_id === v.color_id &&
@@ -328,12 +399,12 @@ export default function ProductDetailsPage() {
           </div>
 
           {cartMessage && (
-            <p className={`inline-message${cartMessage.startsWith('✓') ? ' inline-message--success' : ''}`}>
+            <p className={`inline-message${cartMessage.includes('Added') ? ' inline-message--success' : ''}`}>
               {cartMessage}
             </p>
           )}
           {wishlistMsg && (
-            <p className={`inline-message${wishlistMsg.startsWith('♥') ? ' inline-message--success' : ''}`}>
+            <p className={`inline-message${wishlistMsg.includes('Saved') ? ' inline-message--success' : ''}`}>
               {wishlistMsg}
             </p>
           )}
@@ -405,6 +476,23 @@ export default function ProductDetailsPage() {
           </p>
         )}
       </section>
+
+      {/* ── Related Products ── */}
+      {relatedProducts.length > 0 && (
+        <section className="home-section">
+          <div className="home-section__header">
+            <div>
+              <h2 className="home-section__title">You May Also Like</h2>
+              <p className="home-section__subtitle">Similar products from the same category</p>
+            </div>
+          </div>
+          <div className="products-grid">
+            {relatedProducts.slice(0, 4).map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

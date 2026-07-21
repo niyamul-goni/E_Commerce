@@ -123,3 +123,42 @@ export async function uploadProductImageRequest(productId, file) {
   });
   return data;
 }
+
+// ── Curated Feeds ─────────────────────────────────────────────────────────────
+
+/** Featured products for the homepage hero section */
+export async function getFeaturedProductsRequest(limit = 12) {
+  const { data } = await api.get(`/products/featured?limit=${limit}`);
+  return data;
+}
+
+/** Trending products based on popularity flags */
+export async function getTrendingProductsRequest(limit = 12) {
+  const { data } = await api.get(`/products/trending?limit=${limit}`);
+  return data;
+}
+
+/** Newest arrivals */
+export async function getNewArrivalsRequest(limit = 12) {
+  const { data } = await api.get(`/products/new-arrivals?limit=${limit}`);
+  return data;
+}
+
+/** Top rated products by review average */
+export async function getTopRatedProductsRequest(limit = 12) {
+  const { data } = await api.get(`/products/top-rated?limit=${limit}`);
+  return data;
+}
+
+/** Related products (same category/brand) */
+export async function getRelatedProductsRequest(productId, limit = 8) {
+  const { data } = await api.get(`/products/${productId}/related?limit=${limit}`);
+  return data;
+}
+
+/** All images for a product */
+export async function getProductImagesRequest(productId) {
+  const { data } = await api.get(`/products/${productId}/images`);
+  return data;
+}
+
