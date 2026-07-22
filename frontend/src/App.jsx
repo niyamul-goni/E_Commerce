@@ -25,6 +25,7 @@ import ManagerReviewsPage    from './pages/manager/ManagerReviewsPage';
 import ManagerCategoriesPage from './pages/manager/ManagerCategoriesPage';
 import ManagerSuppliersPage  from './pages/manager/ManagerSuppliersPage';
 import ManagerAnalyticsPage  from './pages/manager/ManagerAnalyticsPage';
+import ManagerLoginPage      from './pages/manager/ManagerLoginPage';
 
 export default function App() {
   return (
@@ -46,6 +47,7 @@ export default function App() {
       </Route>
 
       {/* ── Manager Routes ── */}
+      <Route path="manager/login" element={<ManagerLoginPage />} />
       <Route
         path="manager"
         element={<AdminRoute><ManagerLayout /></AdminRoute>}

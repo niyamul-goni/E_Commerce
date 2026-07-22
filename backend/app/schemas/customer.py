@@ -19,7 +19,6 @@ class RegisterRequest(BaseModel):
     first_name: str = Field(..., max_length=100)
     last_name: str = Field(..., max_length=100)
     phone: Optional[str] = None
-    role: Optional[str] = "customer"  # "customer" | "manager"
 
 
 

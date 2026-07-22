@@ -10,7 +10,7 @@ import { validateEmail, validatePassword, createEmptyErrors } from '../utils/val
 export default function LoginPage() {
   const navigate  = useNavigate();
   const location  = useLocation();
-  const { login } = useAuth();
+  const { login, logout } = useAuth();
   const [form, setForm]         = useState({ email: '', password: '' });
   const [errors, setErrors]     = useState(createEmptyErrors());
   const [submitting, setSubmitting] = useState(false);
@@ -36,7 +36,8 @@ export default function LoginPage() {
 
       // Role-based redirect
       if (loggedInUser?.is_admin) {
-        navigate('/manager', { replace: true });
+        logout();
+        navigate('/manager/login', { replace: true });
       } else {
         const destination = location.state?.from?.pathname || '/';
         navigate(destination, { replace: true });
@@ -74,6 +75,9 @@ export default function LoginPage() {
         </form>
         <p className="auth-card__footer">
           New here? <Link to="/register">Create an account</Link>
+        </p>
+        <p className="auth-card__footer auth-card__footer--manager">
+          Store staff? <Link to="/manager/login">Use manager login</Link>
         </p>
       </section>
     </div>

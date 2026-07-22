@@ -24,12 +24,13 @@ function ShipmentInfo({ orderId }) {
   }, [orderId]);
 
   if (loading || !shipment) return null;
+  const shipmentStatus = shipment.shipment_status || shipment.status;
 
   return (
     <div className="shipment-info">
       <span className="shipment-info__label">📦 Shipment</span>
-      <span className={`shipment-status shipment-status--${shipment.status}`}>
-        {shipment.status}
+      <span className={`shipment-status shipment-status--${shipmentStatus}`}>
+        {shipmentStatus}
       </span>
       {shipment.tracking_number && (
         <span className="shipment-info__track">

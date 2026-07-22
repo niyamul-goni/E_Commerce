@@ -67,7 +67,7 @@ export default function HomePage() {
     setAddingId(product.id);
     setCartMsg('');
     try {
-      await addToCartRequest({ customer_id: user.id, product_id: product.id, quantity: 1 });
+      await addToCartRequest({ product_id: product.id, quantity: 1 });
       setCartMsg(`"${product.name}" added to cart!`);
     } catch (err) {
       setCartMsg(err?.response?.data?.detail || 'Could not add to cart.');
@@ -84,11 +84,10 @@ export default function HomePage() {
       {/* ── Hero ── */}
       <section className="hero card">
         <div className="hero__content">
-          <p className="eyebrow">🇧🇩 Made in Bangladesh · Dhaka Fashion Hub</p>
-          <h1>Discover Bangladeshi Fashion</h1>
+          <p className="eyebrow">New season · New perspective</p>
+          <h1>Find your next fit with GoDrip</h1>
           <p className="hero__subtitle">
-            Shop Infinity, Richman, Yellow, Easy, Sailor, Ecstasy, Westecs & Texmart —
-            authentic Bangladeshi fashion at real BDT prices.
+            Discover clothing, footwear and accessories from a growing catalogue of styles and brands.
           </p>
           <div className="hero__actions">
             <Button id="hero-browse-btn" onClick={() => navigate('/products')}>Shop All Products</Button>
@@ -99,20 +98,6 @@ export default function HomePage() {
             >
               {isAuthenticated ? 'My Orders' : 'Sign In'}
             </Link>
-          </div>
-          <div className="hero__stats">
-            <div className="hero__stat">
-              <span className="hero__stat-value">{featured.length + trending.length + newArrivals.length}+</span>
-              <span className="hero__stat-label">Products</span>
-            </div>
-            <div className="hero__stat">
-              <span className="hero__stat-value">{categories.length}</span>
-              <span className="hero__stat-label">Categories</span>
-            </div>
-            <div className="hero__stat">
-              <span className="hero__stat-value">{brands.length}</span>
-              <span className="hero__stat-label">Brands</span>
-            </div>
           </div>
         </div>
       </section>
@@ -249,7 +234,7 @@ export default function HomePage() {
       <section className="cta-banner card">
         <div className="cta-banner__content">
           <h2>Ready to upgrade your wardrobe?</h2>
-          <p>Join thousands of fashion-forward shoppers discovering authentic Bangladeshi brands.</p>
+          <p>Explore new products and brands as the GoDrip catalogue continues to grow.</p>
           <div className="cta-banner__actions">
             <Button onClick={() => navigate('/products')}>Explore All Products</Button>
             {!isAuthenticated && (

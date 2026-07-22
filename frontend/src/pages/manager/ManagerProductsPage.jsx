@@ -7,63 +7,164 @@ import StatusBadge from '../../components/StatusBadge';
 import {
   createProductRequest,
   deleteProductRequest,
-  getCategoriesRequest,
-  getProductsRequest,
+  getBrandsRequest,
+  getManagedCategoriesRequest,
+  getManagedProductsRequest,
+  getSubcategoriesRequest,
   getSuppliersRequest,
   updateProductRequest,
+  uploadProductImageRequest,
 } from '../../services/catalogService';
 import { formatCurrency } from '../../utils/format';
+import { resolveProductImage } from '../../utils/productImages';
 
-const EMPTY = { name:'', sku:'', description:'', price:'', stock_quantity:'', category_id:'', supplier_id:'', is_active:'true', available_sizes:'' };
+const EMPTY = { name:'', sku:'', description:'', price:'', stock_quantity:'', category_id:'', subcategory_id:'', brand_id:'', supplier_id:'', is_active:'true', available_sizes:'' };
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function ProductImageCell({ product, previewUrl }) {
+  const imageUrl = previewUrl || resolveProductImage(product);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => { setFailed(false); }, [imageUrl]);
+
+  return (
+    <div className="mgr-product-image">
+      {imageUrl && !failed ? (
+        <img src={imageUrl} alt={product.name} onError={() => setFailed(true)} />
+      ) : (
+        <div className="mgr-product-image__empty" aria-label={`${product.name} has no image`}>
+          <span>▧</span>
+          <small>No image</small>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ManagerProductsPage() {
   const [loading, setLoading]       = useState(true);
   const [error,   setError]         = useState('');
   const [products, setProducts]     = useState([]);
   const [categories, setCategories] = useState([]);
+  const [subcategories, setSubcategories] = useState([]);
+  const [brands, setBrands]         = useState([]);
   const [suppliers, setSuppliers]   = useState([]);
   const [form, setForm]             = useState(EMPTY);
   const [editId, setEditId]         = useState(null);
   const [saving, setSaving]         = useState(false);
   const [search, setSearch]         = useState('');
   const [showForm, setShowForm]     = useState(false);
+  const [uploadingId, setUploadingId] = useState(null);
+  const [uploadPreview, setUploadPreview] = useState(null);
+  const [notice, setNotice]         = useState('');
 
-  async function load() {
+  async function load(showLoader = true) {
     try {
-      setLoading(true);
-      const [p, c, s] = await Promise.all([getProductsRequest(), getCategoriesRequest(), getSuppliersRequest()]);
-      setProducts(p); setCategories(c); setSuppliers(s);
+      if (showLoader) setLoading(true);
+      setError('');
+      const [p, c, sc, b, s] = await Promise.all([
+        getManagedProductsRequest(), getManagedCategoriesRequest(), getSubcategoriesRequest(),
+        getBrandsRequest(), getSuppliersRequest(),
+      ]);
+      setProducts(p); setCategories(c); setSubcategories(sc); setBrands(b); setSuppliers(s);
     } catch (e) { setError(e?.response?.data?.detail || 'Failed to load.'); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => () => {
+    if (uploadPreview?.url) URL.revokeObjectURL(uploadPreview.url);
+  }, [uploadPreview]);
 
   function startEdit(p) {
     setEditId(p.id);
     setForm({ name:p.name, sku:p.sku, description:p.description||'', price:p.price,
-      stock_quantity:p.stock_quantity, category_id:p.category_id, supplier_id:p.supplier_id,
-      is_active:String(p.is_active), available_sizes:p.available_sizes||'' });
+      stock_quantity:p.stock_quantity, category_id:p.category_id || '', subcategory_id:p.subcategory_id || '',
+      brand_id:p.brand_id || '', supplier_id:p.supplier_id || '', is_active:String(p.is_active),
+      available_sizes:Array.isArray(p.available_sizes) ? p.available_sizes.join(',') : (p.available_sizes || '') });
     setShowForm(true);
   }
   function cancelEdit() { setEditId(null); setForm(EMPTY); setShowForm(false); }
 
   async function handleSave(e) {
     e.preventDefault();
-    if (!form.name || !form.price) return;
+    setError('');
+    setNotice('');
+    if (!form.name.trim() || !form.sku.trim() || !form.price || !form.category_id || !form.subcategory_id || !form.brand_id || !form.supplier_id) {
+      setError('Name, SKU, price, category, subcategory, brand, and supplier are required.');
+      return;
+    }
+    if (!Number.isFinite(Number(form.price)) || Number(form.price) <= 0) {
+      setError('Price must be greater than zero.');
+      return;
+    }
+    if (!Number.isInteger(Number(form.stock_quantity)) || Number(form.stock_quantity) < 0) {
+      setError('Stock must be a whole number of zero or more.');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...form, price:Number(form.price), stock_quantity:Number(form.stock_quantity),
-        category_id:Number(form.category_id), supplier_id:Number(form.supplier_id), is_active:form.is_active==='true' };
+      const payload = { ...form, name:form.name.trim(), sku:form.sku.trim(),
+        description:form.description.trim() || null,
+        available_sizes:form.available_sizes.trim() || null,
+        price:Number(form.price), stock_quantity:Number(form.stock_quantity),
+        category_id:Number(form.category_id), subcategory_id:Number(form.subcategory_id),
+        brand_id:Number(form.brand_id), supplier_id:Number(form.supplier_id), is_active:form.is_active==='true' };
       editId ? await updateProductRequest(editId, payload) : await createProductRequest(payload);
-      cancelEdit(); await load();
+      setNotice(editId ? 'Product updated successfully.' : 'Product created successfully.');
+      cancelEdit(); await load(false);
     } catch (e) { setError(e?.response?.data?.detail || 'Save failed.'); }
     finally { setSaving(false); }
   }
 
   async function handleDelete(id) {
-    if (!window.confirm('Delete this product?')) return;
-    try { await deleteProductRequest(id); await load(); }
+    if (!window.confirm('Deactivate this product? Order history will be preserved.')) return;
+    setError(''); setNotice('');
+    try {
+      await deleteProductRequest(id);
+      setNotice('Product deactivated successfully.');
+      await load(false);
+    }
     catch (e) { setError(e?.response?.data?.detail || 'Delete failed.'); }
+  }
+
+  async function handleImageSelected(product, event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setError('');
+    setNotice('');
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if ((!ALLOWED_IMAGE_TYPES.has(file.type) && file.type) || !ALLOWED_IMAGE_EXTENSIONS.has(extension)) {
+      setError('Choose a JPG, PNG, GIF, or WebP image.');
+      return;
+    }
+    if (file.size <= 0 || file.size > MAX_IMAGE_BYTES) {
+      setError('The image must be larger than 0 bytes and no more than 5 MB.');
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setUploadPreview({ productId: product.id, url: previewUrl });
+    setUploadingId(product.id);
+    try {
+      const uploaded = await uploadProductImageRequest(product.id, file);
+      setProducts((current) => current.map((item) => (
+        item.id === product.id ? { ...item, image_url: uploaded.image_url } : item
+      )));
+      setNotice(`Image uploaded for “${product.name}”.`);
+    } catch (uploadError) {
+      setError(
+        uploadError?.response?.data?.detail
+        || uploadError?.message
+        || 'Image upload failed. Please try again.',
+      );
+    } finally {
+      setUploadingId(null);
+      setUploadPreview(null);
+    }
   }
 
   const filtered = products.filter((p) =>
@@ -84,6 +185,7 @@ export default function ManagerProductsPage() {
         </button>
       </div>
       {error && <ErrorState message={error} />}
+      {notice && <p className="inline-message inline-message--success" role="status">{notice}</p>}
 
       {showForm && (
         <div className="card mgr-form-card">
@@ -93,9 +195,19 @@ export default function ManagerProductsPage() {
             <FormField label="SKU" value={form.sku} onChange={(e) => setForm({...form,sku:e.target.value})} />
             <FormField label="Price" type="number" step="0.01" value={form.price} onChange={(e) => setForm({...form,price:e.target.value})} />
             <FormField label="Stock" type="number" value={form.stock_quantity} onChange={(e) => setForm({...form,stock_quantity:e.target.value})} />
-            <FormField as="select" label="Category" value={form.category_id} onChange={(e) => setForm({...form,category_id:e.target.value})}>
+            <FormField as="select" label="Category" value={form.category_id} onChange={(e) => setForm({...form,category_id:e.target.value,subcategory_id:''})}>
               <option value="">— Select —</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </FormField>
+            <FormField as="select" label="Subcategory" value={form.subcategory_id} onChange={(e) => setForm({...form,subcategory_id:e.target.value})}>
+              <option value="">— Select —</option>
+              {subcategories.filter((sc) => String(sc.category_id) === String(form.category_id)).map((sc) => (
+                <option key={sc.id} value={sc.id}>{sc.name}</option>
+              ))}
+            </FormField>
+            <FormField as="select" label="Brand" value={form.brand_id} onChange={(e) => setForm({...form,brand_id:e.target.value})}>
+              <option value="">— Select —</option>
+              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </FormField>
             <FormField as="select" label="Supplier" value={form.supplier_id} onChange={(e) => setForm({...form,supplier_id:e.target.value})}>
               <option value="">— Select —</option>
@@ -123,10 +235,16 @@ export default function ManagerProductsPage() {
       <div className="card mgr-table-card">
         <div className="mgr-table-wrap">
           <table className="mgr-table">
-            <thead><tr><th>Product</th><th>Price</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Image</th><th>Product</th><th>Price</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {filtered.map((p) => (
                 <tr key={p.id}>
+                  <td>
+                    <ProductImageCell
+                      product={p}
+                      previewUrl={uploadPreview?.productId === p.id ? uploadPreview.url : null}
+                    />
+                  </td>
                   <td>
                     <strong>{p.name}</strong>
                     <p className="muted" style={{fontSize:'0.78rem'}}>{p.sku}</p>
@@ -141,6 +259,21 @@ export default function ManagerProductsPage() {
                   <td>
                     <div style={{display:'flex',gap:'0.5rem'}}>
                       <button className="mgr-btn" onClick={() => startEdit(p)}>✏️ Edit</button>
+                      <label
+                        className={`mgr-btn mgr-upload-btn${uploadingId === p.id ? ' mgr-upload-btn--busy' : ''}`}
+                        htmlFor={`product-image-${p.id}`}
+                        aria-disabled={uploadingId !== null}
+                      >
+                        {uploadingId === p.id ? 'Uploading…' : p.image_url && resolveProductImage(p) ? '🖼️ Replace' : '🖼️ Upload'}
+                      </label>
+                      <input
+                        id={`product-image-${p.id}`}
+                        className="visually-hidden"
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        disabled={uploadingId !== null}
+                        onChange={(event) => handleImageSelected(p, event)}
+                      />
                       <button className="mgr-btn mgr-btn--danger" onClick={() => handleDelete(p.id)}>🗑️</button>
                     </div>
                   </td>

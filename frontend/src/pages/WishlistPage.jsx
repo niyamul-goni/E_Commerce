@@ -11,15 +11,22 @@ import {
   removeFromWishlistRequest,
 } from '../services/commerceService';
 import { formatCurrency } from '../utils/format';
+import { resolveProductImage } from '../utils/productImages';
 
 function WishlistCard({ item, onRemove, onAddToCart, addingId }) {
   const isAdding = addingId === item.id;
+  const imageUrl = resolveProductImage(item);
+  const [imageFailed, setImageFailed] = useState(false);
 
   return (
     <article className="wishlist-card card">
-      {item.image_url ? (
+      {imageUrl && !imageFailed ? (
         <div className="wishlist-card__img">
-          <img src={item.image_url} alt={item.product_name} />
+          <img
+            src={imageUrl}
+            alt={item.product_name}
+            onError={() => setImageFailed(true)}
+          />
         </div>
       ) : (
         <div className="wishlist-card__img wishlist-card__img--placeholder">
@@ -102,8 +109,7 @@ export default function WishlistPage() {
     setCartMsg('');
     try {
       await addToCartRequest({
-        customer_id: user.id,
-        product_id: item.product_id,
+        variant_id: item.variant_id,
         quantity: 1,
       });
       setCartMsg(`✓ "${item.product_name}" added to cart!`);

@@ -1,9 +1,10 @@
 """Check product variants and inventory, then populate if missing."""
 import psycopg2
+from app.core.config import settings
 import random
 
 conn = psycopg2.connect(
-    "postgresql://postgres.ughxyivuhketqeuqcojg:256525riYad@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres",
+    settings.DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://"),
     sslmode="require",
 )
 cur = conn.cursor()

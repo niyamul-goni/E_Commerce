@@ -4,7 +4,7 @@ import ErrorState from '../../components/ErrorState';
 import FormField from '../../components/FormField';
 import Loader from '../../components/Loader';
 import {
-  getCategoriesRequest,
+  getManagedCategoriesRequest,
   createCategoryRequest,
   updateCategoryRequest,
   deleteCategoryRequest,
@@ -16,13 +16,13 @@ export default function ManagerCategoriesPage() {
   const [error,   setError]     = useState('');
   const [cats,    setCats]      = useState([]);
   const [subs,    setSubs]      = useState([]);
-  const [catForm, setCatForm]   = useState({ name:'', description:'' });
+  const [catForm, setCatForm]   = useState({ name:'', description:'', is_active:'true' });
   const [editCat, setEditCat]   = useState(null);
   const [saving,  setSaving]    = useState(false);
 
   async function load() {
     try {
-      const [c, s] = await Promise.all([getCategoriesRequest(), getSubcategoriesRequest()]);
+      const [c, s] = await Promise.all([getManagedCategoriesRequest(), getSubcategoriesRequest()]);
       setCats(c); setSubs(s);
     } catch (e) { setError(e?.response?.data?.detail || 'Failed to load categories.'); }
     finally { setLoading(false); }
@@ -34,14 +34,15 @@ export default function ManagerCategoriesPage() {
     if (!catForm.name.trim()) return;
     setSaving(true);
     try {
-      editCat ? await updateCategoryRequest(editCat, catForm) : await createCategoryRequest(catForm);
-      setCatForm({ name:'', description:'' }); setEditCat(null); await load();
+      const payload = { ...catForm, is_active: catForm.is_active === 'true' };
+      editCat ? await updateCategoryRequest(editCat, payload) : await createCategoryRequest(payload);
+      setCatForm({ name:'', description:'', is_active:'true' }); setEditCat(null); await load();
     } catch (e) { setError(e?.response?.data?.detail || 'Save failed.'); }
     finally { setSaving(false); }
   }
 
   async function handleDeleteCat(id) {
-    if (!window.confirm('Delete this category?')) return;
+    if (!window.confirm('Deactivate this category? Existing products will be preserved.')) return;
     try { await deleteCategoryRequest(id); await load(); }
     catch (e) { setError(e?.response?.data?.detail || 'Delete failed.'); }
   }
@@ -63,9 +64,13 @@ export default function ManagerCategoriesPage() {
             <form onSubmit={handleSaveCat} style={{ display:'grid', gap:'0.75rem' }}>
               <FormField label="Name" value={catForm.name} onChange={(e) => setCatForm({...catForm,name:e.target.value})} placeholder="e.g. Tops" />
               <FormField label="Description" as="textarea" rows="2" value={catForm.description} onChange={(e) => setCatForm({...catForm,description:e.target.value})} />
+              <FormField as="select" label="Status" value={catForm.is_active} onChange={(e) => setCatForm({...catForm,is_active:e.target.value})}>
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </FormField>
               <div style={{display:'flex',gap:'0.5rem'}}>
                 <Button type="submit" loading={saving}>{editCat?'Update':'Create'}</Button>
-                {editCat&&<button type="button" className="button button--secondary" onClick={()=>{setEditCat(null);setCatForm({name:'',description:''})}}>Cancel</button>}
+                {editCat&&<button type="button" className="button button--secondary" onClick={()=>{setEditCat(null);setCatForm({name:'',description:'',is_active:'true'})}}>Cancel</button>}
               </div>
             </form>
           </div>
@@ -74,15 +79,16 @@ export default function ManagerCategoriesPage() {
             <h2 className="mgr-form-card__title">Categories ({cats.length})</h2>
             <div className="mgr-table-wrap">
               <table className="mgr-table">
-                <thead><tr><th>Name</th><th>Subcategories</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Name</th><th>Status</th><th>Subcategories</th><th>Actions</th></tr></thead>
                 <tbody>
                   {cats.map((c) => (
                     <tr key={c.id}>
                       <td><strong>{c.name}</strong></td>
+                      <td>{c.is_active ? 'Active' : 'Inactive'}</td>
                       <td className="muted">{subs.filter((s)=>s.category_id===c.id).length}</td>
                       <td>
                         <div style={{display:'flex',gap:'0.4rem'}}>
-                          <button className="mgr-btn" onClick={()=>{setEditCat(c.id);setCatForm({name:c.name,description:c.description||''})}}>✏️</button>
+                          <button className="mgr-btn" onClick={()=>{setEditCat(c.id);setCatForm({name:c.name,description:c.description||'',is_active:String(c.is_active)})}}>✏️</button>
                           <button className="mgr-btn mgr-btn--danger" onClick={()=>handleDeleteCat(c.id)}>🗑️</button>
                         </div>
                       </td>

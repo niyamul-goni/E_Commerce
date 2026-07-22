@@ -3,9 +3,11 @@ import traceback
 import httpx
 import json
 
-BASE = "https://ughxyivuhketqeuqcojg.supabase.co"
-SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVnaHh5aXZ1aGtldHFldXFjb2pnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MjkwNzU5NCwiZXhwIjoyMDk4NDgzNTk0fQ.u5YFPT9U1guqLfo7whv7DDLzwN8PskFY9c5bUK2r3S4"
-ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVnaHh5aXZ1aGtldHFldXFjb2pnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI5MDc1OTQsImV4cCI6MjA5ODQ4MzU5NH0.Za4OSoaZ98eUHhAFwphsSd5qtuFZjOHnuh1ekLsj4DI"
+from app.core.config import settings
+
+BASE = settings.SUPABASE_URL
+SERVICE_KEY = settings.SUPABASE_SERVICE_ROLE_KEY
+ANON_KEY = settings.SUPABASE_ANON_KEY
 
 test_email = "debugtest12345@test.com"
 test_password = "TestPass123!"
@@ -91,7 +93,7 @@ print("=" * 60)
 try:
     import psycopg2
     conn = psycopg2.connect(
-        "postgresql://postgres.ughxyivuhketqeuqcojg:256525riYad@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres",
+        settings.DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://"),
         sslmode="require",
     )
     cur = conn.cursor()

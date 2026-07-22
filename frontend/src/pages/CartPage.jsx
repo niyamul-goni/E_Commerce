@@ -89,7 +89,10 @@ export default function CartPage() {
             <article key={item.id} className="cart-item card">
               <div>
                 <h3>{item.product?.name || `Product #${item.product_id}`}</h3>
-                <p>{formatCurrency(item.product?.price)}</p>
+                <p>{formatCurrency(item.unit_price ?? item.product?.price)}</p>
+                {(item.color_name || item.size_name) && (
+                  <p className="muted">{[item.color_name, item.size_name].filter(Boolean).join(' · ')}</p>
+                )}
                 <Link to={`/products/${item.product_id}`}>View product</Link>
               </div>
               <div className="cart-item__actions">

@@ -58,6 +58,13 @@ export async function getInventoryLevelsRequest() {
   return data;
 }
 
+export async function updateInventoryStockRequest(productId, availableStock) {
+  const { data } = await api.put(`/manager/inventory/${productId}`, {
+    available_stock: availableStock,
+  });
+  return data;
+}
+
 // ── Manager: Reviews moderation ───────────────────────────────────────────────
 export async function getAllReviewsRequest() {
   const { data } = await api.get('/manager/reviews');

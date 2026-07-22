@@ -6,7 +6,7 @@ import FormField from '../components/FormField';
 import Loader from '../components/Loader';
 import PageHeader from '../components/PageHeader';
 import { useAuth } from '../context/AuthContext';
-import { getProductsRequest } from '../services/catalogService';
+import { getProductsRequest, getProductVariantsRequest } from '../services/catalogService';
 import { createReviewRequest, getReviewsByProductRequest } from '../services/commerceService';
 import { formatDate } from '../utils/format';
 import { createEmptyErrors, validateRating, validateRequired } from '../utils/validators';
@@ -17,6 +17,8 @@ export default function ReviewsPage() {
   const [error, setError] = useState('');
   const [products, setProducts] = useState([]);
   const [selectedProductId, setSelectedProductId] = useState('');
+  const [variants, setVariants] = useState([]);
+  const [selectedVariantId, setSelectedVariantId] = useState('');
   const [reviews, setReviews] = useState([]);
   const [form, setForm] = useState({ rating: 5, comment: '' });
   const [formErrors, setFormErrors] = useState(createEmptyErrors());
@@ -54,8 +56,15 @@ export default function ReviewsPage() {
 
     async function loadReviews() {
       try {
-        const data = await getReviewsByProductRequest(selectedProductId);
-        if (active) setReviews(data);
+        const [reviewData, variantData] = await Promise.all([
+          getReviewsByProductRequest(selectedProductId),
+          getProductVariantsRequest(selectedProductId),
+        ]);
+        if (active) {
+          setReviews(reviewData);
+          setVariants(variantData);
+          setSelectedVariantId(variantData[0]?.id ? String(variantData[0].id) : '');
+        }
       } catch (loadError) {
         if (active) setError(loadError?.response?.data?.detail || 'Failed to load product reviews.');
       }
@@ -72,6 +81,7 @@ export default function ReviewsPage() {
       rating: validateRating(form.rating),
       comment: validateRequired(form.comment, 'Comment'),
       customer_id: user ? '' : 'You must be signed in to review',
+      variant_id: selectedVariantId ? '' : 'Select a product variant',
     };
     setFormErrors(nextErrors);
     return !Object.values(nextErrors).some(Boolean);
@@ -84,10 +94,10 @@ export default function ReviewsPage() {
     try {
       setSubmitting(true);
       await createReviewRequest({
-        customer_id: user.id,
         product_id: Number(selectedProductId),
+        variant_id: Number(selectedVariantId),
         rating: Number(form.rating),
-        comment: form.comment,
+        body: form.comment,
       });
       const data = await getReviewsByProductRequest(selectedProductId);
       setReviews(data);
@@ -125,6 +135,20 @@ export default function ReviewsPage() {
             ))}
           </FormField>
           <p className="muted">Selected: {selectedProduct?.name}</p>
+          <FormField
+            as="select"
+            label="Variant"
+            value={selectedVariantId}
+            onChange={(event) => setSelectedVariantId(event.target.value)}
+            error={formErrors.variant_id}
+          >
+            {!variants.length && <option value="">No active variants</option>}
+            {variants.map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {[variant.color_name, variant.size_name, variant.sku].filter(Boolean).join(' · ')}
+              </option>
+            ))}
+          </FormField>
         </div>
 
         <section className="card">
@@ -167,7 +191,7 @@ export default function ReviewsPage() {
             rows="5"
             value={form.comment}
             onChange={(event) => setForm({ ...form, comment: event.target.value })}
-            error={formErrors.customer_id}
+            error={formErrors.comment || formErrors.customer_id}
           />
           <Button type="submit" loading={submitting}>
             Publish review

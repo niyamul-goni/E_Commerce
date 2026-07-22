@@ -17,6 +17,7 @@ import {
 } from '../../services/catalogService';
 import { createEmptyErrors, validatePrice, validateQuantity, validateRequired } from '../../utils/validators';
 import { formatCurrency } from '../../utils/format';
+import { resolveProductImage } from '../../utils/productImages';
 
 const emptyForm = {
   name: '',
@@ -255,10 +256,11 @@ export default function AdminProductsPage() {
                 {products.map((product) => (
                   <tr key={product.id}>
                     <td>
-                      {product.image_url ? (
+                      {resolveProductImage(product) ? (
                         <img
-                          src={product.image_url.startsWith('/static') ? `http://localhost:8000${product.image_url}` : product.image_url}
+                          src={resolveProductImage(product)}
                           alt={product.name}
+                          onError={(event) => { event.currentTarget.style.display = 'none'; }}
                           style={{ width: '50px', height: '50px', objectFit: 'cover', borderRadius: '6px' }}
                         />
                       ) : (

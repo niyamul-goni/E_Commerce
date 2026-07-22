@@ -174,7 +174,7 @@ export default function ProductsPage() {
     setAddingId(product.id);
     setCartMsg('');
     try {
-      await addToCartRequest({ customer_id: user.id, product_id: product.id, quantity: 1 });
+      await addToCartRequest({ product_id: product.id, quantity: 1 });
       setCartMsg(`"${product.name}" added to cart!`);
     } catch (err) {
       setCartMsg(err?.response?.data?.detail || 'Could not add to cart.');
@@ -187,8 +187,8 @@ export default function ProductsPage() {
     <div className="page-stack">
       {/* ── Hero Search Bar ── */}
       <div className="search-hero card">
-        <h1 className="search-hero__title">Shop Bangladeshi Fashion</h1>
-        <p className="search-hero__sub">Search Infinity, Richman, Yellow, Easy & more local brands.</p>
+        <h1 className="search-hero__title">Explore GoDrip</h1>
+        <p className="search-hero__sub">Search the complete catalogue across every available product and brand.</p>
         <div className="search-bar">
           <input
             id="product-search-input"

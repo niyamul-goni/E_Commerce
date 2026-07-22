@@ -6,7 +6,6 @@ import ErrorState from '../components/ErrorState';
 import FormField from '../components/FormField';
 import Loader from '../components/Loader';
 import PageHeader from '../components/PageHeader';
-import { useAuth } from '../context/AuthContext';
 import { getProductsRequest } from '../services/catalogService';
 import {
   createOrderRequest,
@@ -22,7 +21,6 @@ import { createEmptyErrors, validateRequired } from '../utils/validators';
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -79,7 +77,7 @@ export default function CheckoutPage() {
 
   function validateForm() {
     const nextErrors = {
-      shipping_address: validateRequired(form.shipping_address, 'Shipping address'),
+      shipping_address: validateRequired(form.address_id, 'Saved shipping address'),
       payment_method:   validateRequired(form.payment_method, 'Payment method'),
     };
     setFormErrors(nextErrors);
@@ -131,22 +129,22 @@ export default function CheckoutPage() {
       setError('');
 
       const order = await createOrderRequest({
-        customer_id: user.id,
+        shipping_address_id: Number(form.address_id),
         shipping_address: form.shipping_address,
         billing_address: form.billing_address || null,
+        coupon_id: couponApplied?.coupon_id || null,
         items: enrichedItems.map((item) => ({
-          product_id: item.product_id,
+          variant_id: item.variant_id,
           quantity: item.quantity,
         })),
       });
 
       await recordPaymentRequest({
         order_id: order.id,
-        amount: total,
+        amount: order.total_amount,
         payment_method: form.payment_method,
-        payment_status: 'paid',
+        payment_status: form.payment_method === 'cod' ? 'pending' : 'paid',
         transaction_reference: `WEB-${Date.now()}`,
-        coupon_id: couponApplied?.coupon_id || null,
       });
 
       // Cart may already be cleared by the backend, so don't block on this
@@ -180,13 +178,13 @@ export default function CheckoutPage() {
           {/* ── Saved Addresses ── */}
           {addresses.length > 0 ? (
             <FormField
-              label="Shipping Address"
+              label="Saved Shipping Address"
               as="select"
               value={form.address_id}
               onChange={handleAddressSelect}
               error={formErrors.shipping_address}
             >
-              <option value="">— Enter manually —</option>
+              <option value="">— Select —</option>
               {addresses.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.label}: {a.line1}, {a.city}
@@ -194,19 +192,13 @@ export default function CheckoutPage() {
                 </option>
               ))}
             </FormField>
-          ) : null}
-
-          {/* Manual shipping address (shown when no saved addr selected) */}
-          {(!form.address_id || addresses.length === 0) && (
-            <FormField
-              label={addresses.length > 0 ? 'Custom Shipping Address' : 'Shipping Address'}
-              as="textarea"
-              rows="4"
-              value={form.shipping_address}
-              onChange={(event) => setForm({ ...form, shipping_address: event.target.value })}
-              error={formErrors.shipping_address}
-              placeholder="Street, city, state, postal code"
-            />
+          ) : (
+            <div className="card card--soft">
+              <p>A saved address is required by the order system.</p>
+              <Button type="button" variant="secondary" onClick={() => navigate('/profile')}>
+                Add an address in your profile
+              </Button>
+            </div>
           )}
 
           {form.address_id && (
@@ -237,7 +229,7 @@ export default function CheckoutPage() {
             <option value="bkash">bKash</option>
             <option value="nagad">Nagad</option>
             <option value="rocket">Rocket</option>
-            <option value="cash">Cash on Delivery</option>
+            <option value="cod">Cash on Delivery</option>
           </FormField>
 
           {/* ── Coupon Code ── */}

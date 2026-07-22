@@ -7,7 +7,7 @@ import StatusBadge from '../../components/StatusBadge';
 import { getAllOrdersRequest, updateOrderStatusRequest } from '../../services/commerceService';
 import { formatCurrency, formatDate } from '../../utils/format';
 
-const statusOptions = ['pending', 'paid', 'shipped', 'delivered', 'cancelled'];
+const statusOptions = ['pending', 'confirmed', 'packed', 'shipped', 'delivered', 'cancelled', 'returned', 'refunded'];
 
 export default function AdminOrdersPage() {
   const [loading, setLoading] = useState(true);
@@ -66,7 +66,7 @@ export default function AdminOrdersPage() {
             <div className="order-items">
               {(order.items || []).map((item) => (
                 <div key={item.id} className="summary-row">
-                  <span>Product #{item.product_id}</span>
+                  <span>{item.product_name || `Product #${item.product_id}`}</span>
                   <span>x{item.quantity}</span>
                 </div>
               ))}

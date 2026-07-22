@@ -1,5 +1,5 @@
 """
-FashionHub — FastAPI Application Entry Point
+GoDrip — FastAPI Application Entry Point
 Production-quality e-commerce API demonstrating normalized 45-table PostgreSQL database
 """
 from __future__ import annotations
@@ -61,7 +61,9 @@ _extended_routers = False
 async def lifespan(app: FastAPI):
     # Ensure the upload directory exists
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    init_db()
+    # Schema DDL must be an explicit opt-in, especially for managed/live DBs.
+    if settings.INITIALIZE_DATABASE_ON_STARTUP:
+        init_db()
     yield
 
 
@@ -71,9 +73,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     lifespan=lifespan,
-    title="FashionHub API",
+    title="GoDrip API",
     description="""
-## FashionHub E-Commerce API
+## GoDrip E-Commerce API
 
 Production-quality fashion & lifestyle e-commerce backend demonstrating:
 - **45-table normalized PostgreSQL schema** (3NF/BCNF)
@@ -167,7 +169,7 @@ if _extended_routers:
 @app.get("/", tags=["Health"])
 def root() -> dict:
     return {
-        "message": "FashionHub E-Commerce API v2.0",
+        "message": "GoDrip E-Commerce API v2.0",
         "docs": "/docs",
         "database_tables": 45,
         "schema_version": "2.0 (3NF/BCNF Normalized)",

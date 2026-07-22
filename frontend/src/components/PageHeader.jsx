@@ -2,7 +2,7 @@ export default function PageHeader({ title, subtitle, action }) {
   return (
     <div className="page-header">
       <div>
-        <p className="eyebrow">E-Commerce Management System</p>
+        <p className="eyebrow">GoDrip</p>
         <h1>{title}</h1>
         {subtitle ? <p className="page-header__subtitle">{subtitle}</p> : null}
       </div>

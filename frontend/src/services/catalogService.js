@@ -1,9 +1,14 @@
-import { api } from './api';
+import { api, API_BASE_URL, getStoredToken } from './api';
 
 // ── Categories ──────────────────────────────────────────────────────────────
 
 export async function getCategoriesRequest() {
   const { data } = await api.get('/categories');
+  return data;
+}
+
+export async function getManagedCategoriesRequest() {
+  const { data } = await api.get('/categories/manage/all');
   return data;
 }
 
@@ -88,6 +93,11 @@ export async function getProductsRequest(params = {}) {
   return data;
 }
 
+export async function getManagedProductsRequest() {
+  const { data } = await api.get('/products/manage/all');
+  return data;
+}
+
 export async function getProductRequest(productId) {
   const { data } = await api.get(`/products/${productId}`);
   return data;
@@ -118,10 +128,35 @@ export async function deleteProductRequest(productId) {
 export async function uploadProductImageRequest(productId, file) {
   const formData = new FormData();
   formData.append('file', file);
-  const { data } = await api.post(`/products/${productId}/image`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+
+  // Use the browser's native multipart handling for file uploads. In
+  // particular, never set Content-Type: the browser must append its generated
+  // boundary or FastAPI cannot parse the `file` field and responds with 422.
+  const token = getStoredToken();
+  const response = await fetch(`${API_BASE_URL}/products/${productId}/image`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
   });
-  return data;
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // A proxy/server failure may return an empty or non-JSON body.
+  }
+
+  if (!response.ok) {
+    const detail = payload?.detail;
+    const message = typeof detail === 'string'
+      ? detail
+      : Array.isArray(detail)
+        ? detail.map((item) => item?.msg || 'Invalid upload').join(' ')
+        : `Image upload failed (${response.status}).`;
+    throw new Error(message);
+  }
+
+  return payload;
 }
 
 // ── Curated Feeds ─────────────────────────────────────────────────────────────
@@ -161,4 +196,3 @@ export async function getProductImagesRequest(productId) {
   const { data } = await api.get(`/products/${productId}/images`);
   return data;
 }
-

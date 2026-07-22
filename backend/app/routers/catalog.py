@@ -6,16 +6,17 @@ Products use: brands, subcategories, categories, product_variants, inventory tab
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, require_admin
-from app.crud.catalog import category, product, supplier
 from app.database import get_db
 from app.schemas import (
     CategoryCreate,
@@ -34,6 +35,31 @@ categories_router = APIRouter(prefix="/categories", tags=["categories"])
 suppliers_router  = APIRouter(prefix="/suppliers",  tags=["suppliers"])
 products_router   = APIRouter(prefix="/products",   tags=["products"])
 customers_router  = APIRouter(prefix="/customers",  tags=["customers"])
+
+
+def _slugify(value: str) -> str:
+    """Create a stable URL slug without relying on database extensions."""
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug or uuid.uuid4().hex[:12]
+
+
+def _available_slug(db: Session, table: str, value: str, *, exclude_id: int | None = None) -> str:
+    """Return a unique slug for one of the two allow-listed catalog tables."""
+    if table not in {"categories", "products"}:
+        raise ValueError("Unsupported slug table")
+    base = _slugify(value)
+    candidate = base
+    suffix = 2
+    while True:
+        sql = f"SELECT id FROM {table} WHERE slug = :slug"
+        params: dict = {"slug": candidate}
+        if exclude_id is not None:
+            sql += " AND id != :exclude_id"
+            params["exclude_id"] = exclude_id
+        if db.execute(text(sql), params).fetchone() is None:
+            return candidate
+        candidate = f"{base}-{suffix}"
+        suffix += 1
 
 
 # ── Categories — map to actual `categories` table ────────────────────────────
@@ -55,13 +81,29 @@ def list_categories(db: Session = Depends(get_db)):
     ]
 
 
-@categories_router.post(
-    "", response_model=CategoryRead,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin)],
-)
+@categories_router.get("/manage/all", response_model=list[dict], dependencies=[Depends(require_admin)])
+def list_categories_for_manager(db: Session = Depends(get_db)):
+    rows = db.execute(text(
+        "SELECT id, name, slug, description, is_active, created_at, updated_at "
+        "FROM categories ORDER BY sort_order, name"
+    )).mappings().all()
+    return [dict(row) for row in rows]
+
+
+@categories_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 def create_category(category_in: CategoryCreate, db: Session = Depends(get_db)):
-    return category.create(db, obj_in=category_in)
+    slug = _available_slug(db, "categories", category_in.name)
+    try:
+        row = db.execute(text("""
+            INSERT INTO categories (name, slug, description, is_active)
+            VALUES (:name, :slug, :description, :is_active)
+            RETURNING id, name, slug, description, is_active, created_at, updated_at
+        """), {**category_in.model_dump(), "slug": slug}).mappings().one()
+        db.commit()
+        return dict(row)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Category name or slug already exists") from exc
 
 
 @categories_router.get("/{category_id}", response_model=dict)
@@ -74,15 +116,28 @@ def get_category(category_id: int, db: Session = Depends(get_db)):
     return {"id": row[0], "name": row[1], "slug": row[2], "description": row[3], "is_active": row[4]}
 
 
-@categories_router.put(
-    "/{category_id}", response_model=CategoryRead,
-    dependencies=[Depends(require_admin)],
-)
+@categories_router.put("/{category_id}", dependencies=[Depends(require_admin)])
 def update_category(category_id: int, category_in: CategoryUpdate, db: Session = Depends(get_db)):
-    db_category = category.get(db, category_id)
-    if db_category is None:
+    existing = db.execute(text("SELECT id, name FROM categories WHERE id = :id"), {"id": category_id}).fetchone()
+    if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
-    return category.update(db, db_obj=db_category, obj_in=category_in)
+    data = category_in.model_dump(exclude_unset=True)
+    if "name" in data:
+        data["slug"] = _available_slug(db, "categories", data["name"], exclude_id=category_id)
+    allowed = {"name", "slug", "description", "is_active"}
+    updates = {key: value for key, value in data.items() if key in allowed}
+    try:
+        if updates:
+            assignments = ", ".join(f"{key} = :{key}" for key in updates)
+            db.execute(text(f"UPDATE categories SET {assignments}, updated_at = now() WHERE id = :id"), {**updates, "id": category_id})
+            db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Category name or slug already exists") from exc
+    row = db.execute(text(
+        "SELECT id, name, slug, description, is_active, created_at, updated_at FROM categories WHERE id = :id"
+    ), {"id": category_id}).mappings().one()
+    return dict(row)
 
 
 @categories_router.delete(
@@ -90,10 +145,12 @@ def update_category(category_id: int, category_in: CategoryUpdate, db: Session =
     dependencies=[Depends(require_admin)],
 )
 def delete_category(category_id: int, db: Session = Depends(get_db)):
-    deleted = category.remove(db, object_id=category_id)
-    if deleted is None:
+    row = db.execute(text("SELECT id FROM categories WHERE id = :id"), {"id": category_id}).fetchone()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
-    return Message(message="Category deleted successfully")
+    db.execute(text("UPDATE categories SET is_active = false, updated_at = now() WHERE id = :id"), {"id": category_id})
+    db.commit()
+    return Message(message="Category deactivated successfully")
 
 
 # ── Suppliers — actual `suppliers` table ─────────────────────────────────────
@@ -113,13 +170,19 @@ def list_suppliers(db: Session = Depends(get_db)):
     ]
 
 
-@suppliers_router.post(
-    "", response_model=SupplierRead,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin)],
-)
+@suppliers_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 def create_supplier(supplier_in: SupplierCreate, db: Session = Depends(get_db)):
-    return supplier.create(db, obj_in=supplier_in)
+    try:
+        row = db.execute(text("""
+            INSERT INTO suppliers (name, contact_email, contact_phone, address, is_active)
+            VALUES (:name, :contact_email, :contact_phone, :address, :is_active)
+            RETURNING id, name, contact_email, contact_phone, address, is_active, created_at, updated_at
+        """), supplier_in.model_dump()).mappings().one()
+        db.commit()
+        return dict(row)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Supplier name or contact details already exist") from exc
 
 
 @suppliers_router.get("/{supplier_id}", response_model=dict)
@@ -134,15 +197,22 @@ def get_supplier(supplier_id: int, db: Session = Depends(get_db)):
             "contact_phone": row[3], "address": row[4], "is_active": row[5]}
 
 
-@suppliers_router.put(
-    "/{supplier_id}", response_model=SupplierRead,
-    dependencies=[Depends(require_admin)],
-)
+@suppliers_router.put("/{supplier_id}", dependencies=[Depends(require_admin)])
 def update_supplier(supplier_id: int, supplier_in: SupplierUpdate, db: Session = Depends(get_db)):
-    db_supplier = supplier.get(db, supplier_id)
-    if db_supplier is None:
+    existing = db.execute(text("SELECT id FROM suppliers WHERE id = :id"), {"id": supplier_id}).fetchone()
+    if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supplier not found")
-    return supplier.update(db, db_obj=db_supplier, obj_in=supplier_in)
+    data = supplier_in.model_dump(exclude_unset=True)
+    allowed = {"name", "contact_email", "contact_phone", "address", "is_active"}
+    updates = {key: value for key, value in data.items() if key in allowed}
+    if updates:
+        assignments = ", ".join(f"{key} = :{key}" for key in updates)
+        db.execute(text(f"UPDATE suppliers SET {assignments}, updated_at = now() WHERE id = :id"), {**updates, "id": supplier_id})
+        db.commit()
+    row = db.execute(text(
+        "SELECT id, name, contact_email, contact_phone, address, is_active, created_at, updated_at FROM suppliers WHERE id = :id"
+    ), {"id": supplier_id}).mappings().one()
+    return dict(row)
 
 
 @suppliers_router.delete(
@@ -150,10 +220,12 @@ def update_supplier(supplier_id: int, supplier_in: SupplierUpdate, db: Session =
     dependencies=[Depends(require_admin)],
 )
 def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
-    deleted = supplier.remove(db, object_id=supplier_id)
-    if deleted is None:
+    row = db.execute(text("SELECT id FROM suppliers WHERE id = :id"), {"id": supplier_id}).fetchone()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supplier not found")
-    return Message(message="Supplier deleted successfully")
+    db.execute(text("UPDATE suppliers SET is_active = false, updated_at = now() WHERE id = :id"), {"id": supplier_id})
+    db.commit()
+    return Message(message="Supplier deactivated successfully")
 
 
 # ── Products — raw SQL against actual 45-table Supabase schema ───────────────
@@ -184,6 +256,8 @@ def _product_row_to_dict(row) -> dict:
         "review_count":    int(row[20]) if row[20] is not None else 0,
         "is_trending":     bool(row[21]) if row[21] is not None else False,
         "is_new_arrival":  bool(row[22]) if row[22] is not None else False,
+        "brand_id":        row[23],
+        "subcategory_id":  row[24],
     }
 
 
@@ -192,7 +266,13 @@ _BASE_QUERY = """
     SELECT
         p.id,
         p.name,
-        p.slug          AS sku,
+        COALESCE((
+            SELECT pv.sku
+            FROM product_variants pv
+            WHERE pv.product_id = p.id
+            ORDER BY pv.is_active DESC, pv.id
+            LIMIT 1
+        ), p.slug)      AS sku,
         p.description,
         p.base_price    AS price,
         COALESCE((
@@ -227,7 +307,9 @@ _BASE_QUERY = """
             WHERE rpv.product_id = p.id
         ), 0)            AS review_count,
         p.is_trending,
-        p.is_new_arrival
+        p.is_new_arrival,
+        p.brand_id,
+        p.subcategory_id
     FROM products p
     LEFT JOIN brands b        ON b.id  = p.brand_id
     LEFT JOIN subcategories sc ON sc.id = p.subcategory_id
@@ -238,13 +320,19 @@ _BASE_QUERY = """
 
 @products_router.get("/brands", tags=["products"])
 def list_brands(db: Session = Depends(get_db)):
-    """Return all brands that have at least one active product."""
+    """Return active brands, including brands available for a new product."""
     rows = db.execute(text(
-        "SELECT DISTINCT b.id, b.name FROM brands b "
-        "JOIN products p ON p.brand_id = b.id "
-        "WHERE p.is_active = true ORDER BY b.name"
+        "SELECT b.id, b.name FROM brands b WHERE b.is_active = true ORDER BY b.name"
     )).fetchall()
     return [{"id": r[0], "name": r[1]} for r in rows]
+
+
+@products_router.get("/manage/all", tags=["products"], dependencies=[Depends(require_admin)])
+def list_products_for_manager(db: Session = Depends(get_db), skip: int = 0, limit: int = Query(200, le=500)):
+    sql = _BASE_QUERY.replace("WHERE p.is_active = true", "WHERE true")
+    sql += " ORDER BY p.updated_at DESC, p.name ASC LIMIT :limit OFFSET :skip"
+    rows = db.execute(text(sql), {"limit": limit, "skip": skip}).fetchall()
+    return [_product_row_to_dict(row) for row in rows]
 
 
 @products_router.get("/search", tags=["products"])
@@ -312,13 +400,123 @@ def filter_products_by_category(category_id: int, db: Session = Depends(get_db))
     return [_product_row_to_dict(r) for r in rows]
 
 
-@products_router.post(
-    "", response_model=ProductRead,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin)],
-)
+def _resolve_product_references(db: Session, data: dict) -> tuple[int, int, int]:
+    """Resolve normalized brand/subcategory/supplier references for manager writes."""
+    supplier_id = data.get("supplier_id")
+    brand_id = data.get("brand_id")
+    subcategory_id = data.get("subcategory_id")
+    category_id = data.get("category_id")
+
+    if not brand_id:
+        brand_id = db.execute(text("SELECT id FROM brands WHERE is_active = true ORDER BY id LIMIT 1")).scalar()
+    if not subcategory_id and category_id:
+        subcategory_id = db.execute(text(
+            "SELECT id FROM subcategories WHERE category_id = :category_id AND is_active = true ORDER BY sort_order, id LIMIT 1"
+        ), {"category_id": category_id}).scalar()
+
+    if not supplier_id or not brand_id or not subcategory_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Supplier, brand, and subcategory are required for the normalized product schema",
+        )
+    references = db.execute(text("""
+        SELECT
+            EXISTS (SELECT 1 FROM suppliers WHERE id = :supplier_id AND is_active = true),
+            EXISTS (SELECT 1 FROM brands WHERE id = :brand_id AND is_active = true),
+            EXISTS (
+                SELECT 1 FROM subcategories
+                WHERE id = :subcategory_id AND is_active = true
+                  AND (:category_id IS NULL OR category_id = :category_id)
+            )
+    """), {
+        "supplier_id": supplier_id, "brand_id": brand_id,
+        "subcategory_id": subcategory_id, "category_id": category_id,
+    }).one()
+    if not all(references):
+        raise HTTPException(status_code=400, detail="Invalid supplier, brand, or category/subcategory selection")
+    return int(brand_id), int(subcategory_id), int(supplier_id)
+
+
+def _set_product_stock(db: Session, product_id: int, desired_stock: int, sku: str) -> None:
+    """Adjust aggregate available stock through one inventory row, preserving reservations."""
+    variant_id = db.execute(text(
+        "SELECT id FROM product_variants WHERE product_id = :pid ORDER BY is_active DESC, id LIMIT 1"
+    ), {"pid": product_id}).scalar()
+    if variant_id is None:
+        variant_id = db.execute(text(
+            "INSERT INTO product_variants (product_id, sku, is_active) VALUES (:pid, :sku, true) RETURNING id"
+        ), {"pid": product_id, "sku": sku}).scalar()
+
+    inventory_rows = db.execute(text("""
+        SELECT inv.id, inv.current_stock, inv.reserved_stock
+        FROM inventory inv
+        JOIN product_variants pv ON pv.id = inv.variant_id
+        WHERE pv.product_id = :pid
+        ORDER BY inv.id
+        FOR UPDATE
+    """), {"pid": product_id}).fetchall()
+
+    if not inventory_rows:
+        warehouse_id = db.execute(text(
+            "SELECT id FROM warehouses WHERE is_active = true ORDER BY id LIMIT 1"
+        )).scalar()
+        if warehouse_id is None:
+            if desired_stock:
+                raise HTTPException(status_code=400, detail="Create an active warehouse before assigning product stock")
+            return
+        db.execute(text("""
+            INSERT INTO inventory (variant_id, warehouse_id, current_stock, reserved_stock, reorder_level)
+            VALUES (:variant_id, :warehouse_id, :stock, 0, 10)
+        """), {"variant_id": variant_id, "warehouse_id": warehouse_id, "stock": desired_stock})
+        return
+
+    current_available = sum(int(row[1]) - int(row[2]) for row in inventory_rows)
+    delta = desired_stock - current_available
+    primary = inventory_rows[0]
+    next_current = int(primary[1]) + delta
+    if next_current < int(primary[2]):
+        raise HTTPException(status_code=409, detail="Requested stock is below currently reserved stock")
+    db.execute(text(
+        "UPDATE inventory SET current_stock = :stock, updated_at = now() WHERE id = :id"
+    ), {"stock": next_current, "id": primary[0]})
+
+
+@products_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 def create_product(product_in: ProductCreate, db: Session = Depends(get_db)):
-    return product.create(db, obj_in=product_in)
+    data = product_in.model_dump()
+    brand_id, subcategory_id, supplier_id = _resolve_product_references(db, data)
+    slug = _available_slug(db, "products", data.get("sku") or data["name"])
+    variant_sku = (data.get("sku") or slug).strip()
+    try:
+        product_id = db.execute(text("""
+            INSERT INTO products (
+                name, slug, brand_id, supplier_id, subcategory_id, base_price,
+                description, is_active, available_sizes
+            ) VALUES (
+                :name, :slug, :brand_id, :supplier_id, :subcategory_id, :price,
+                :description, :is_active, :available_sizes
+            ) RETURNING id
+        """), {
+            **data,
+            "slug": slug,
+            "brand_id": brand_id,
+            "subcategory_id": subcategory_id,
+            "supplier_id": supplier_id,
+        }).scalar_one()
+        db.execute(text(
+            "INSERT INTO product_variants (product_id, sku, is_active) VALUES (:pid, :sku, true)"
+        ), {"pid": product_id, "sku": variant_sku})
+        _set_product_stock(db, product_id, int(data.get("stock_quantity") or 0), variant_sku)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Product slug or SKU already exists") from exc
+    if data.get("is_active") is False:
+        return {"id": product_id, "is_active": False, "message": "Product created"}
+    return get_product(product_id, db)
 
 
 @products_router.get("/featured", tags=["products"])
@@ -404,15 +602,71 @@ def get_related_products(product_id: int, db: Session = Depends(get_db), limit: 
     return [_product_row_to_dict(r) for r in rows]
 
 
-@products_router.put(
-    "/{product_id}", response_model=ProductRead,
-    dependencies=[Depends(require_admin)],
-)
+@products_router.put("/{product_id}", dependencies=[Depends(require_admin)])
 def update_product(product_id: int, product_in: ProductUpdate, db: Session = Depends(get_db)):
-    db_product = product.get(db, product_id)
-    if db_product is None:
+    existing = db.execute(text("SELECT id, slug FROM products WHERE id = :id"), {"id": product_id}).fetchone()
+    if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return product.update(db, db_obj=db_product, obj_in=product_in)
+    data = product_in.model_dump(exclude_unset=True)
+    if "category_id" in data and "subcategory_id" not in data:
+        resolved_subcategory = db.execute(text(
+            "SELECT id FROM subcategories WHERE category_id = :category_id AND is_active = true ORDER BY sort_order, id LIMIT 1"
+        ), {"category_id": data["category_id"]}).scalar()
+        if resolved_subcategory is None:
+            raise HTTPException(status_code=400, detail="Selected category has no active subcategory")
+        data["subcategory_id"] = resolved_subcategory
+    if any(key in data for key in ("supplier_id", "brand_id", "subcategory_id", "category_id")):
+        current_refs = db.execute(text(
+            "SELECT brand_id, subcategory_id, supplier_id FROM products WHERE id = :id"
+        ), {"id": product_id}).one()
+        reference_data = {
+            "brand_id": data.get("brand_id", current_refs[0]),
+            "subcategory_id": data.get("subcategory_id", current_refs[1]),
+            "supplier_id": data.get("supplier_id", current_refs[2]),
+            "category_id": data.get("category_id"),
+        }
+        _resolve_product_references(db, reference_data)
+    updates: dict = {}
+    field_map = {
+        "name": "name",
+        "description": "description",
+        "price": "base_price",
+        "supplier_id": "supplier_id",
+        "brand_id": "brand_id",
+        "subcategory_id": "subcategory_id",
+        "is_active": "is_active",
+        "available_sizes": "available_sizes",
+    }
+    for source, target in field_map.items():
+        if source in data:
+            updates[target] = data[source]
+
+    variant_sku = data.get("sku")
+    if variant_sku:
+        updates["slug"] = _available_slug(db, "products", variant_sku, exclude_id=product_id)
+
+    try:
+        if updates:
+            assignments = ", ".join(f"{column} = :{column}" for column in updates)
+            db.execute(text(f"UPDATE products SET {assignments}, updated_at = now() WHERE id = :id"), {**updates, "id": product_id})
+        if variant_sku:
+            db.execute(text("""
+                UPDATE product_variants SET sku = :sku, updated_at = now()
+                WHERE id = (SELECT id FROM product_variants WHERE product_id = :pid ORDER BY id LIMIT 1)
+            """), {"sku": variant_sku.strip(), "pid": product_id})
+        if "stock_quantity" in data and data["stock_quantity"] is not None:
+            _set_product_stock(db, product_id, int(data["stock_quantity"]), variant_sku or existing[1])
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Product slug or SKU already exists") from exc
+
+    if data.get("is_active") is False:
+        return {"id": product_id, "is_active": False, "message": "Product updated"}
+    return get_product(product_id, db)
 
 
 @products_router.delete(
@@ -420,10 +674,12 @@ def update_product(product_id: int, product_in: ProductUpdate, db: Session = Dep
     dependencies=[Depends(require_admin)],
 )
 def delete_product(product_id: int, db: Session = Depends(get_db)):
-    deleted = product.remove(db, object_id=product_id)
-    if deleted is None:
+    existing = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": product_id}).fetchone()
+    if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return Message(message="Product deleted successfully")
+    db.execute(text("UPDATE products SET is_active = false, updated_at = now() WHERE id = :id"), {"id": product_id})
+    db.commit()
+    return Message(message="Product deactivated successfully")
 
 
 # ── Product Image Upload ──────────────────────────────────────────────────────
@@ -432,10 +688,17 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
 _UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "products"
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+ALLOWED_IMAGE_TYPES = {
+    ".jpg": {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".png": {"image/png"},
+    ".gif": {"image/gif"},
+    ".webp": {"image/webp"},
+}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
-@products_router.post("/{product_id}/image", tags=["products"])
+@products_router.post("/{product_id}/image", tags=["products"], dependencies=[Depends(require_admin)])
 async def upload_product_image(
     product_id: int,
     file: UploadFile = File(...),
@@ -444,10 +707,10 @@ async def upload_product_image(
     """Upload an image for a product and set it as the primary image."""
 
     # Validate the product exists
-    exists = db.execute(
-        text("SELECT id FROM products WHERE id = :pid"), {"pid": product_id}
+    product = db.execute(
+        text("SELECT id, name FROM products WHERE id = :pid"), {"pid": product_id}
     ).fetchone()
-    if not exists:
+    if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
     # Validate file extension
@@ -457,9 +720,16 @@ async def upload_product_image(
             status_code=400,
             detail=f"Invalid file type '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
         )
+    if file.content_type not in ALLOWED_IMAGE_TYPES[ext]:
+        raise HTTPException(
+            status_code=400,
+            detail="The selected file's content type does not match its image extension.",
+        )
 
     # Read file content (enforce max size)
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="The selected image is empty.")
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="File too large. Maximum size is 5 MB.")
 
@@ -467,35 +737,56 @@ async def upload_product_image(
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     unique_name = f"{product_id}_{uuid.uuid4().hex}{ext}"
     file_path = _UPLOAD_DIR / unique_name
-    with open(file_path, "wb") as f:
-        f.write(content)
+    file_path.write_bytes(content)
 
     # Build the URL path the frontend will use to display the image
     image_url = f"/static/products/{unique_name}"
 
     # Upsert into product_images table
     existing = db.execute(
-        text("SELECT id FROM product_images WHERE product_id = :pid AND is_primary = true"),
+        text("SELECT id, image_url FROM product_images WHERE product_id = :pid AND is_primary = true"),
         {"pid": product_id},
     ).fetchone()
+    previous_image_url = existing[1] if existing else None
 
-    if existing:
-        db.execute(
-            text("UPDATE product_images SET image_url = :url WHERE id = :id"),
-            {"url": image_url, "id": existing[0]},
-        )
-    else:
-        db.execute(
-            text(
-                "INSERT INTO product_images (product_id, image_url, is_primary, sort_order) "
-                "VALUES (:pid, :url, true, 0)"
-            ),
-            {"pid": product_id, "url": image_url},
-        )
+    try:
+        if existing:
+            db.execute(
+                text("UPDATE product_images SET image_url = :url, alt_text = :alt WHERE id = :id"),
+                {"url": image_url, "alt": product[1], "id": existing[0]},
+            )
+        else:
+            db.execute(
+                text(
+                    "INSERT INTO product_images (product_id, image_url, alt_text, is_primary, sort_order) "
+                    "VALUES (:pid, :url, :alt, true, 0)"
+                ),
+                {"pid": product_id, "url": image_url, "alt": product[1]},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        file_path.unlink(missing_ok=True)
+        raise
 
-    db.commit()
+    # A replacement should not leave the previous local upload orphaned. Never
+    # touch remote URLs or files outside the dedicated product upload folder.
+    if previous_image_url and previous_image_url.startswith("/static/products/"):
+        previous_path = _UPLOAD_DIR / Path(previous_image_url).name
+        if previous_path != file_path:
+            try:
+                previous_path.unlink(missing_ok=True)
+            except OSError:
+                # The database already points at the new valid upload. A stale
+                # file cleanup failure must not make the manager see a false
+                # upload failure after the transaction committed.
+                pass
 
-    return {"message": "Image uploaded successfully", "image_url": image_url}
+    return {
+        "message": "Image uploaded successfully",
+        "product_id": product_id,
+        "image_url": image_url,
+    }
 
 
 # ── Subcategories ─────────────────────────────────────────────────────────────
@@ -626,4 +917,3 @@ def get_product_variants(product_id: int, db: Session = Depends(get_db)):
         }
         for r in rows
     ]
-

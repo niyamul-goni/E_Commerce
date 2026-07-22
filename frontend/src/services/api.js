@@ -1,13 +1,12 @@
 import axios from 'axios';
 
 export const TOKEN_KEY = 'ecommerce_token';
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+// In development, Vite proxies /api to FastAPI. Keeping the browser request
+// same-origin avoids localhost/127.0.0.1 CORS and IPv4/IPv6 mismatches.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 api.interceptors.request.use((config) => {

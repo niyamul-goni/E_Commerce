@@ -17,8 +17,7 @@ import {
   getReviewsByProductRequest,
 } from '../services/commerceService';
 import { formatCurrency, formatDate } from '../utils/format';
-
-const PLACEHOLDER_IMG = 'https://picsum.photos/seed/placeholder/600/800';
+import { resolveProductGallery } from '../utils/productImages';
 
 // ── Star Rating ───────────────────────────────────────────────────────────────
 function StarRating({ value, onChange, readOnly = false }) {
@@ -74,6 +73,7 @@ export default function ProductDetailsPage() {
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError,      setReviewError]      = useState('');
   const [activeImageIdx,   setActiveImageIdx]   = useState(0);
+  const [activeImageError, setActiveImageError] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -93,6 +93,7 @@ export default function ProductDetailsPage() {
         setReviews(reviewData);
         setRelatedProducts(relatedData);
         setActiveImageIdx(0);
+        setActiveImageError(false);
         // Pre-select first in-stock variant
         const firstAvailable = variantData.find((v) => v.available_stock > 0) || variantData[0];
         if (firstAvailable) setSelectedVariant(firstAvailable);
@@ -116,11 +117,7 @@ export default function ProductDetailsPage() {
     : product?.price;
 
   // Build gallery images from product data
-  const galleryImages = product?.images?.length
-    ? product.images.map((img) => img.image_url)
-    : product?.image_url
-      ? [product.image_url]
-      : [PLACEHOLDER_IMG];
+  const galleryImages = resolveProductGallery(product);
 
   // Derive unique sizes and colors for grouped variant selector
   const uniqueSizes  = [...new Map(variants.map((v) => [v.size_name, v])).values()].filter((v) => v.size_name);
@@ -128,11 +125,11 @@ export default function ProductDetailsPage() {
 
   async function handleAddToCart() {
     if (!user) { navigate('/login'); return; }
+    if (!selectedVariant) { setCartMessage('Select a variant first.'); return; }
     try {
       setCartMessage('');
       await addToCartRequest({
-        customer_id: user.id,
-        product_id: product.id,
+        variant_id: selectedVariant.id,
         quantity,
       });
       setCartMessage('Added to cart!');
@@ -156,14 +153,15 @@ export default function ProductDetailsPage() {
   async function handleReviewSubmit(e) {
     e.preventDefault();
     if (!user) { navigate('/login'); return; }
+    if (!selectedVariant) { setReviewError('Select a variant before reviewing.'); return; }
     setReviewError('');
     try {
       setReviewSubmitting(true);
       await createReviewRequest({
-        customer_id: user.id,
         product_id: product.id,
+        variant_id: selectedVariant.id,
         rating: Number(reviewForm.rating),
-        comment: reviewForm.comment || null,
+        body: reviewForm.comment || null,
       });
       const nextReviews = await getReviewsByProductRequest(productId);
       setReviews(nextReviews);
@@ -205,17 +203,17 @@ export default function ProductDetailsPage() {
         {/* Left: image gallery */}
         <div className="product-detail__gallery">
           <div className="product-detail__image-main">
-            {galleryImages[activeImageIdx] ? (
+            {galleryImages[activeImageIdx] && !activeImageError ? (
               <img
                 src={galleryImages[activeImageIdx]}
                 alt={product.name}
                 className="product-detail__image"
-                onError={(e) => { e.target.src = PLACEHOLDER_IMG; }}
+                onError={() => setActiveImageError(true)}
               />
             ) : (
               <div className="product-detail__image-placeholder">
-                <span>🛍️</span>
-                <p>Product Image</p>
+                <span>▧</span>
+                <p>No product image uploaded</p>
               </div>
             )}
             {hasDiscount && (
@@ -231,9 +229,15 @@ export default function ProductDetailsPage() {
                   key={idx}
                   type="button"
                   className={`product-detail__thumb${idx === activeImageIdx ? ' active' : ''}`}
-                  onClick={() => setActiveImageIdx(idx)}
+                  onClick={() => {
+                    setActiveImageIdx(idx);
+                    setActiveImageError(false);
+                  }}
                 >
-                  <img src={img} alt={`${product.name} thumbnail ${idx + 1}`} />
+                  <img
+                    src={img}
+                    alt={`${product.name} thumbnail ${idx + 1}`}
+                  />
                 </button>
               ))}
             </div>

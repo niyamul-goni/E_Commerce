@@ -6,7 +6,7 @@ import StatusBadge from '../../components/StatusBadge';
 import { getAllOrdersRequest, updateOrderStatusRequest, createShipmentRequest } from '../../services/commerceService';
 import { formatCurrency, formatDate } from '../../utils/format';
 
-const STATUS_OPTIONS = ['pending','paid','processing','shipped','delivered','cancelled'];
+const STATUS_OPTIONS = ['pending','confirmed','packed','shipped','delivered','cancelled','returned','refunded'];
 
 export default function ManagerOrdersPage() {
   const [loading, setLoading]   = useState(true);
@@ -34,7 +34,10 @@ export default function ManagerOrdersPage() {
   async function handleShip(orderId) {
     try {
       await createShipmentRequest({ order_id: orderId, ...shipForm });
-      await updateOrderStatusRequest(orderId, 'shipped');
+      const order = orders.find((item) => item.id === orderId);
+      if (order?.status === 'packed' && shipForm.status === 'in_transit') {
+        await updateOrderStatusRequest(orderId, 'shipped');
+      }
       setShipping(null); setShipForm({ tracking_number:'', carrier:'', status:'in_transit' });
       await load();
     } catch (e) { setError(e?.response?.data?.detail || 'Failed to create shipment.'); }
@@ -108,7 +111,7 @@ export default function ManagerOrdersPage() {
                         <p><strong>Shipping:</strong> {o.shipping_address}</p>
                         {(o.items||[]).map((item)=>(
                           <div key={item.id} className="summary-row">
-                            <span>Product #{item.product_id}</span><span>×{item.quantity}</span>
+                            <span>{item.product_name || `Product #${item.product_id}`}{item.size_name ? ` · ${item.size_name}` : ''}{item.color_name ? ` · ${item.color_name}` : ''}</span><span>×{item.quantity}</span>
                           </div>
                         ))}
                       </div>

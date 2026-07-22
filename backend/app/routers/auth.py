@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,12 @@ from app.core.supabase import SupabaseAuthError, create_supabase_user, login_sup
 from app.schemas import CustomerRead, RegisterRequest, Token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class ManagerInventoryUpdate(BaseModel):
+    """Manager-controlled available stock target for a product."""
+
+    available_stock: int = Field(ge=0, le=1_000_000)
 
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
@@ -44,9 +51,9 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
             },
         )
     except SupabaseAuthError as exc:
-        # 422 = user already exists in Supabase (allow through)
-        if exc.status_code != 422:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        if exc.status_code == 422:
+            raise HTTPException(status_code=409, detail="Email already registered") from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     # ── 3. Log in to get token ─────────────────────────────────────────────────
     try:
@@ -54,33 +61,24 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
     except SupabaseAuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    # ── 4. Ensure a row exists in the local `customers` table ─────────────────
+    # ── 4. Ensure a non-privileged row exists in `customers` ──────────────────
+    # Public registration must never be able to grant manager access. Existing
+    # managers keep their database-backed is_admin flag; promotion is an
+    # out-of-band administrative operation.
     # Supabase may not have synced it yet — insert or ignore
     try:
         db.execute(text(
             "INSERT INTO customers (email, password_hash, is_active, is_admin) "
-            "VALUES (:email, 'supabase_managed', true, :is_admin) "
+            "VALUES (:email, 'supabase_managed', true, false) "
             "ON CONFLICT (email) DO NOTHING"
         ), {
-            "email":    register_in.email,
-            "is_admin": (register_in.role == "manager"),
+            "email": register_in.email,
         })
         db.commit()
     except Exception:
         db.rollback()
 
-    # ── 5. If manager, set is_admin = true ────────────────────────────────────
-    if (register_in.role or "customer") == "manager":
-        try:
-            db.execute(
-                text("UPDATE customers SET is_admin = true WHERE email = :email"),
-                {"email": register_in.email},
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-
-    # ── 6. Populate customer_profiles (name / phone) ──────────────────────────
+    # ── 5. Populate customer_profiles (name / phone) ──────────────────────────
     try:
         db.execute(text(
             "INSERT INTO customer_profiles (customer_id, first_name, last_name, phone) "
@@ -106,6 +104,65 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
         session = login_supabase_user(email=form_data.username, password=form_data.password)
     except SupabaseAuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    return Token(access_token=session["access_token"])
+
+
+@router.post("/customer-login", response_model=Token)
+def customer_login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+) -> Token:
+    """Authenticate storefront customers without admitting manager accounts."""
+    try:
+        session = login_supabase_user(email=form_data.username, password=form_data.password)
+    except SupabaseAuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    account = db.execute(text("""
+        SELECT is_admin, is_active
+        FROM customers
+        WHERE lower(email) = lower(:email)
+        LIMIT 1
+    """), {"email": form_data.username}).fetchone()
+
+    if account is not None and account[0]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Manager accounts must use the separate manager login",
+        )
+    if account is not None and not account[1]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This customer account is inactive",
+        )
+
+    return Token(access_token=session["access_token"])
+
+
+@router.post("/manager-login", response_model=Token)
+def manager_login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+) -> Token:
+    """Authenticate a manager and enforce the database-backed manager role."""
+    try:
+        session = login_supabase_user(email=form_data.username, password=form_data.password)
+    except SupabaseAuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    manager = db.execute(text("""
+        SELECT is_admin, is_active
+        FROM customers
+        WHERE lower(email) = lower(:email)
+        LIMIT 1
+    """), {"email": form_data.username}).fetchone()
+
+    if manager is None or not manager[0] or not manager[1]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account does not have active manager access",
+        )
 
     return Token(access_token=session["access_token"])
 
@@ -184,6 +241,110 @@ def get_inventory_levels(db: Session = Depends(get_db)):
     ]
 
 
+@manager_router.put("/inventory/{product_id}", dependencies=[Depends(require_admin)])
+def update_inventory_level(
+    product_id: int,
+    payload: ManagerInventoryUpdate,
+    db: Session = Depends(get_db),
+):
+    """Set aggregate available stock while preserving every reservation."""
+    try:
+        product = db.execute(text(
+            "SELECT id FROM products WHERE id = :product_id LIMIT 1"
+        ), {"product_id": product_id}).fetchone()
+        if product is None:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        inventory_rows = db.execute(text("""
+            SELECT inv.id, inv.current_stock, inv.reserved_stock
+            FROM inventory inv
+            JOIN product_variants pv ON pv.id = inv.variant_id
+            WHERE pv.product_id = :product_id
+            ORDER BY inv.id
+            FOR UPDATE
+        """), {"product_id": product_id}).fetchall()
+
+        current_available = sum(max(0, int(row[1]) - int(row[2])) for row in inventory_rows)
+        reserved_stock = sum(int(row[2]) for row in inventory_rows)
+        difference = payload.available_stock - current_available
+
+        if difference > 0 and inventory_rows:
+            first = inventory_rows[0]
+            db.execute(text("""
+                UPDATE inventory
+                SET current_stock = current_stock + :amount, updated_at = now()
+                WHERE id = :inventory_id
+            """), {"amount": difference, "inventory_id": first[0]})
+        elif difference < 0:
+            remaining_reduction = -difference
+            for row in inventory_rows:
+                removable = max(0, int(row[1]) - int(row[2]))
+                reduction = min(removable, remaining_reduction)
+                if reduction:
+                    db.execute(text("""
+                        UPDATE inventory
+                        SET current_stock = current_stock - :amount, updated_at = now()
+                        WHERE id = :inventory_id
+                    """), {"amount": reduction, "inventory_id": row[0]})
+                    remaining_reduction -= reduction
+                if remaining_reduction == 0:
+                    break
+        elif difference > 0:
+            variant_id = db.execute(text("""
+                SELECT id FROM product_variants
+                WHERE product_id = :product_id AND is_active = true
+                ORDER BY id LIMIT 1
+            """), {"product_id": product_id}).scalar()
+            if variant_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Create an active product variant before adding inventory",
+                )
+
+            warehouse_id = db.execute(text("""
+                SELECT id FROM warehouses
+                WHERE is_active = true
+                ORDER BY id LIMIT 1
+            """)).scalar()
+            if warehouse_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="No active warehouse is available for inventory",
+                )
+
+            db.execute(text("""
+                INSERT INTO inventory
+                    (variant_id, warehouse_id, current_stock, reserved_stock, reorder_level)
+                VALUES (:variant_id, :warehouse_id, :stock, 0, 10)
+            """), {
+                "variant_id": variant_id,
+                "warehouse_id": warehouse_id,
+                "stock": payload.available_stock,
+            })
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Unable to update inventory") from exc
+
+    stock_status = (
+        "out_of_stock" if payload.available_stock <= 0
+        else "low_stock" if payload.available_stock < 10
+        else "ok"
+    )
+    return {
+        "product_id": product_id,
+        "available_stock": payload.available_stock,
+        "reserved_stock": reserved_stock,
+        "total_stock": payload.available_stock + reserved_stock,
+        "stock_status": stock_status,
+        "message": "Inventory updated",
+    }
+
+
 @manager_router.get("/reviews", dependencies=[Depends(require_admin)])
 def list_all_reviews(db: Session = Depends(get_db)):
     """All reviews across all products, with customer email and reply status."""
@@ -219,6 +380,15 @@ def reply_to_review(review_id: int, payload: dict, db: Session = Depends(get_db)
     if not reply_text:
         raise HTTPException(status_code=400, detail="Reply text is required")
 
+    admin_id = db.execute(text(
+        "SELECT id FROM admins WHERE email = :email AND is_active = true"
+    ), {"email": current_user.email}).scalar()
+    if admin_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This manager account is not linked to an active admin profile",
+        )
+
     existing = db.execute(text(
         "SELECT id FROM review_replies WHERE review_id = :rid"
     ), {"rid": review_id}).fetchone()
@@ -230,7 +400,7 @@ def reply_to_review(review_id: int, payload: dict, db: Session = Depends(get_db)
     else:
         db.execute(text(
             "INSERT INTO review_replies (review_id, admin_id, body) VALUES (:rid, :aid, :text)"
-        ), {"rid": review_id, "aid": current_user.id, "text": reply_text})
+        ), {"rid": review_id, "aid": admin_id, "text": reply_text})
 
     db.commit()
     return {"message": "Reply saved"}

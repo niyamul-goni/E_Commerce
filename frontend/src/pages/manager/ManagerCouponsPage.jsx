@@ -78,7 +78,7 @@ export default function ManagerCouponsPage() {
               <label className="field__label">Type</label>
               <select className="field__control" value={form.coupon_type} onChange={(e) => setForm({...form,coupon_type:e.target.value})}>
                 <option value="percentage">Percentage (%)</option>
-                <option value="fixed">Fixed Amount</option>
+                <option value="fixed_amount">Fixed Amount</option>
               </select>
             </div>
             <div className="field">

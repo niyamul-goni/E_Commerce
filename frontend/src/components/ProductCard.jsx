@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Button from './Button';
 import { formatCurrency } from '../utils/format';
-
-const PLACEHOLDER_IMG = 'https://picsum.photos/seed/placeholder/400/500';
+import { resolveProductImage } from '../utils/productImages';
 
 export default function ProductCard({
   product,
@@ -16,7 +15,7 @@ export default function ProductCard({
   const [imgError, setImgError] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
 
-  const imageUrl = (!imgError && product.image_url) ? product.image_url : PLACEHOLDER_IMG;
+  const imageUrl = imgError ? null : resolveProductImage(product);
   const hasDiscount = product.discount_price && product.discount_price < product.price;
   const discountPercent = hasDiscount
     ? Math.round(((product.price - product.discount_price) / product.price) * 100)
@@ -56,15 +55,24 @@ export default function ProductCard({
       {/* Image */}
       <Link to={`/products/${product.id}`} className="product-card__image-link">
         <div className="product-card__image-wrap">
-          {!imgLoaded && <div className="product-card__image-skeleton" />}
-          <img
-            src={imageUrl}
-            alt={product.name}
-            className={`product-card__image${imgLoaded ? ' loaded' : ''}`}
-            loading="lazy"
-            onLoad={() => setImgLoaded(true)}
-            onError={() => setImgError(true)}
-          />
+          {imageUrl ? (
+            <>
+              {!imgLoaded && <div className="product-card__image-skeleton" />}
+              <img
+                src={imageUrl}
+                alt={product.name}
+                className={`product-card__image${imgLoaded ? ' loaded' : ''}`}
+                loading="lazy"
+                onLoad={() => setImgLoaded(true)}
+                onError={() => setImgError(true)}
+              />
+            </>
+          ) : (
+            <div className="product-card__image-placeholder" role="img" aria-label={`${product.name} has no image`}>
+              <span>▧</span>
+              <small>No image uploaded</small>
+            </div>
+          )}
         </div>
       </Link>
 

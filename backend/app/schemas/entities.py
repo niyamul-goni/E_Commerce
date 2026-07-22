@@ -5,19 +5,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import ConfigDict, EmailStr, Field, field_validator
 
 from app.models.enums import OrderStatus, PaymentStatus, ShipmentStatus
 from app.schemas.common import ORMModel
 
 
 class RegisterRequest(ORMModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
     first_name: str = Field(min_length=1, max_length=100)
     last_name: str = Field(min_length=1, max_length=100)
     email: EmailStr
     phone: Optional[str] = Field(default=None, max_length=30)
     password: str = Field(min_length=8, max_length=128)
-    role: Optional[str] = Field(default="customer")  # "customer" | "manager"
 
     @field_validator("phone")
     @classmethod
@@ -121,6 +122,8 @@ class ProductCreate(ORMModel):
     stock_quantity: int = Field(ge=0)
     category_id: int
     supplier_id: int
+    brand_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
     is_active: bool = True
     available_sizes: Optional[str] = Field(default=None, max_length=500)
 
@@ -133,6 +136,8 @@ class ProductUpdate(ORMModel):
     stock_quantity: Optional[int] = Field(default=None, ge=0)
     category_id: Optional[int] = None
     supplier_id: Optional[int] = None
+    brand_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
     is_active: Optional[bool] = None
     available_sizes: Optional[str] = Field(default=None, max_length=500)
 

@@ -8,22 +8,25 @@ import enum
 
 class OrderStatus(str, enum.Enum):
     PENDING   = "pending"
-    PAID      = "paid"
+    CONFIRMED = "confirmed"
+    PACKED    = "packed"
     SHIPPED   = "shipped"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
+    RETURNED  = "returned"
+    REFUNDED  = "refunded"
 
 
 class PaymentStatus(str, enum.Enum):
-    PENDING   = "pending"
-    COMPLETED = "completed"
-    FAILED    = "failed"
-    REFUNDED  = "refunded"
+    PENDING  = "pending"
+    PAID     = "paid"
+    FAILED   = "failed"
+    REFUNDED = "refunded"
 
 
 class ShipmentStatus(str, enum.Enum):
     PENDING    = "pending"
+    PACKED     = "packed"
     IN_TRANSIT = "in_transit"
     DELIVERED  = "delivered"
     RETURNED   = "returned"
-    CANCELLED  = "cancelled"

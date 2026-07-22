@@ -16,7 +16,7 @@ export default function Layout() {
     <div className="app-shell">
       <header className="site-header">
         <div className="site-header__brand">
-          <Link to="/" className="brand-mark">NovaMart</Link>
+          <Link to="/" className="brand-mark">GoDrip</Link>
           <span className="brand-tag">Commerce</span>
         </div>
 
@@ -49,6 +49,7 @@ export default function Layout() {
             </>
           ) : (
             <>
+              <Link to="/manager/login" className="manager-entry-link">Manager</Link>
               <Link to="/login"    className="button button--secondary">Login</Link>
               <Link to="/register" className="button">Register</Link>
             </>

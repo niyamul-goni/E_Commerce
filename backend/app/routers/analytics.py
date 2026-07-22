@@ -10,8 +10,13 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.database import get_db
+from app.auth.dependencies import require_admin
 
-router = APIRouter(prefix="/analytics", tags=["Analytics & Reports"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["Analytics & Reports"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 @router.get("/dashboard/kpis")

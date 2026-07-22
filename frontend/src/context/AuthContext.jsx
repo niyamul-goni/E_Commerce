@@ -1,5 +1,10 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { getCurrentUserRequest, loginRequest, registerRequest } from '../services/authService';
+import {
+  getCurrentUserRequest,
+  loginRequest,
+  managerLoginRequest,
+  registerRequest,
+} from '../services/authService';
 import { getStoredToken, setAuthToken } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -52,6 +57,17 @@ export function AuthProvider({ children }) {
     return hydrateSession(response.access_token);
   }
 
+  async function managerLogin(email, password) {
+    const response = await managerLoginRequest(email, password);
+    const currentUser = await hydrateSession(response.access_token);
+    if (!currentUser?.is_admin) {
+      setAuthToken(null);
+      setUser(null);
+      throw new Error('This account does not have manager access.');
+    }
+    return currentUser;
+  }
+
   async function register(payload) {
     const response = await registerRequest(payload);
     return hydrateSession(response.access_token);
@@ -72,6 +88,7 @@ export function AuthProvider({ children }) {
     isManager,                   // semantic alias
     role:            isManager ? 'manager' : 'customer',
     login,
+    managerLogin,
     register,
     logout,
     setUser,

@@ -1,6 +1,6 @@
 # Frontend
 
-React + Vite frontend for the E-Commerce Management System.
+React + Vite frontend for the GoDrip e-commerce store and manager console.
 
 ## Setup
 
