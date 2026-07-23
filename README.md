@@ -32,6 +32,18 @@ Full-stack e-commerce assignment scaffold built with React, FastAPI, PostgreSQL,
 
 If you are moving to Supabase, also set `SUPABASE_URL` and the keys you plan to use for auth or storage. The `SUPABASE_URL` project URL is not the same as the database connection string, so SQLAlchemy still needs `SUPABASE_DATABASE_URL` or `DATABASE_URL`.
 
+### Product images on multiple computers
+
+Manager uploads use Supabase Storage automatically when `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET` are configured.
+The backend creates the public `product-images` bucket on the first upload if
+it does not exist. This keeps newly uploaded images available to every teammate
+and deployment instead of saving them on only one computer.
+
+Use `PRODUCT_IMAGE_STORAGE=local` only for offline development. Local uploads
+are written to `backend/static/products` and must be committed separately if
+another clone needs them. Never commit `backend/.env` or the service role key.
+
 ## Database
 
 You can initialize the database with either:

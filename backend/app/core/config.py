@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: Optional[str] = None
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
     SUPABASE_DATABASE_URL: Optional[str] = None
+    SUPABASE_STORAGE_BUCKET: str = "product-images"
+    PRODUCT_IMAGE_STORAGE: str = "auto"
     DATABASE_URL: str = ""
     INITIALIZE_DATABASE_ON_STARTUP: bool = False
     SECRET_KEY: str = "change-me-in-production"
@@ -55,6 +57,14 @@ class Settings(BaseSettings):
             # Fall back to comma-separated
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
+
+    @field_validator("PRODUCT_IMAGE_STORAGE")
+    @classmethod
+    def validate_product_image_storage(cls, value: str) -> str:
+        mode = value.strip().lower()
+        if mode not in {"auto", "local", "supabase"}:
+            raise ValueError("PRODUCT_IMAGE_STORAGE must be auto, local, or supabase")
+        return mode
 
     @model_validator(mode="after")
     def resolve_database_url(self) -> "Settings":

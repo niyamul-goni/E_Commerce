@@ -17,6 +17,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, require_admin
+from app.core.product_image_storage import (
+    ProductImageStorageError,
+    delete_managed_product_image,
+    store_product_image,
+)
 from app.database import get_db
 from app.schemas import (
     CategoryCreate,
@@ -733,14 +738,16 @@ async def upload_product_image(
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="File too large. Maximum size is 5 MB.")
 
-    # Save to disk with a unique filename
-    _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    unique_name = f"{product_id}_{uuid.uuid4().hex}{ext}"
-    file_path = _UPLOAD_DIR / unique_name
-    file_path.write_bytes(content)
-
-    # Build the URL path the frontend will use to display the image
-    image_url = f"/static/products/{unique_name}"
+    try:
+        image_url = await store_product_image(
+            product_id=product_id,
+            extension=ext,
+            content=content,
+            content_type=file.content_type,
+            local_dir=_UPLOAD_DIR,
+        )
+    except ProductImageStorageError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     # Upsert into product_images table
     existing = db.execute(
@@ -766,21 +773,21 @@ async def upload_product_image(
         db.commit()
     except Exception:
         db.rollback()
-        file_path.unlink(missing_ok=True)
+        await delete_managed_product_image(image_url, local_dir=_UPLOAD_DIR)
         raise
 
-    # A replacement should not leave the previous local upload orphaned. Never
-    # touch remote URLs or files outside the dedicated product upload folder.
-    if previous_image_url and previous_image_url.startswith("/static/products/"):
-        previous_path = _UPLOAD_DIR / Path(previous_image_url).name
-        if previous_path != file_path:
-            try:
-                previous_path.unlink(missing_ok=True)
-            except OSError:
-                # The database already points at the new valid upload. A stale
-                # file cleanup failure must not make the manager see a false
-                # upload failure after the transaction committed.
-                pass
+    # A replacement should not leave the previous managed upload orphaned.
+    # Remote URLs outside this application's bucket are never touched.
+    if previous_image_url != image_url:
+        try:
+            await delete_managed_product_image(
+                previous_image_url,
+                local_dir=_UPLOAD_DIR,
+            )
+        except (OSError, ProductImageStorageError):
+            # The database already points at the new valid upload. Cleanup
+            # failure must not make the manager see a false upload failure.
+            pass
 
     return {
         "message": "Image uploaded successfully",

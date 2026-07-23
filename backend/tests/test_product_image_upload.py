@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
+from app.core import product_image_storage
 from app.routers import catalog
 
 
@@ -49,6 +50,7 @@ def _upload(filename, content_type, content=b"not-empty"):
 
 def test_upload_replaces_primary_and_removes_previous_local_file(tmp_path, monkeypatch):
     monkeypatch.setattr(catalog, "_UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(product_image_storage.settings, "PRODUCT_IMAGE_STORAGE", "local")
     previous = tmp_path / "7_previous.jpg"
     previous.write_bytes(b"previous")
     db = _FakeDatabase(primary_image=(11, "/static/products/7_previous.jpg"))
@@ -72,6 +74,7 @@ def test_upload_replaces_primary_and_removes_previous_local_file(tmp_path, monke
 
 def test_upload_rejects_extension_content_type_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(catalog, "_UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(product_image_storage.settings, "PRODUCT_IMAGE_STORAGE", "local")
     db = _FakeDatabase()
 
     with pytest.raises(HTTPException) as exc_info:

@@ -5,7 +5,6 @@ Works with the existing `product_images` table in the Supabase schema.
 """
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -14,12 +13,24 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_admin
+from app.core.product_image_storage import (
+    ProductImageStorageError,
+    delete_managed_product_image,
+    store_product_image,
+)
 from app.database import get_db
 
 router = APIRouter(prefix="/products", tags=["product-images"])
 
 _UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "products"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+ALLOWED_IMAGE_TYPES = {
+    ".jpg": {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".png": {"image/png"},
+    ".gif": {"image/gif"},
+    ".webp": {"image/webp"},
+}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
@@ -71,44 +82,57 @@ async def upload_product_image(
             status_code=400,
             detail=f"Invalid file type '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
         )
+    if file.content_type not in ALLOWED_IMAGE_TYPES[ext]:
+        raise HTTPException(
+            status_code=400,
+            detail="The selected file's content type does not match its image extension.",
+        )
 
     # Read and validate size
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="The selected image is empty.")
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="File too large. Max 5 MB.")
 
-    # Save to disk
-    _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    unique_name = f"{product_id}_{uuid.uuid4().hex}{ext}"
-    file_path = _UPLOAD_DIR / unique_name
-    with open(file_path, "wb") as f:
-        f.write(content)
+    try:
+        image_url = await store_product_image(
+            product_id=product_id,
+            extension=ext,
+            content=content,
+            content_type=file.content_type,
+            local_dir=_UPLOAD_DIR,
+        )
+    except ProductImageStorageError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    image_url = f"/static/products/{unique_name}"
+    try:
+        # If setting as primary, clear existing primary.
+        if is_primary:
+            db.execute(text(
+                "UPDATE product_images SET is_primary = false WHERE product_id = :pid"
+            ), {"pid": product_id})
 
-    # If setting as primary, clear existing primary
-    if is_primary:
-        db.execute(text(
-            "UPDATE product_images SET is_primary = false WHERE product_id = :pid"
-        ), {"pid": product_id})
+        max_sort = db.execute(text(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM product_images WHERE product_id = :pid"
+        ), {"pid": product_id}).scalar()
 
-    # Get next sort order
-    max_sort = db.execute(text(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM product_images WHERE product_id = :pid"
-    ), {"pid": product_id}).scalar()
-
-    result = db.execute(text(
-        "INSERT INTO product_images (product_id, image_url, alt_text, is_primary, sort_order) "
-        "VALUES (:pid, :url, :alt, :primary, :sort) RETURNING id"
-    ), {
-        "pid": product_id,
-        "url": image_url,
-        "alt": alt_text or f"Product {product_id} image",
-        "primary": is_primary,
-        "sort": max_sort,
-    })
-    db.commit()
-    new_id = result.fetchone()[0]
+        result = db.execute(text(
+            "INSERT INTO product_images (product_id, image_url, alt_text, is_primary, sort_order) "
+            "VALUES (:pid, :url, :alt, :primary, :sort) RETURNING id"
+        ), {
+            "pid": product_id,
+            "url": image_url,
+            "alt": alt_text or f"Product {product_id} image",
+            "primary": is_primary,
+            "sort": max_sort,
+        })
+        db.commit()
+        new_id = result.fetchone()[0]
+    except Exception:
+        db.rollback()
+        await delete_managed_product_image(image_url, local_dir=_UPLOAD_DIR)
+        raise
 
     return {"id": new_id, "image_url": image_url, "is_primary": is_primary, "message": "Image uploaded"}
 
@@ -117,7 +141,7 @@ async def upload_product_image(
     "/{product_id}/images/{image_id}",
     dependencies=[Depends(require_admin)],
 )
-def delete_product_image(product_id: int, image_id: int, db: Session = Depends(get_db)):
+async def delete_product_image(product_id: int, image_id: int, db: Session = Depends(get_db)):
     """Delete a product image."""
     row = db.execute(text(
         "SELECT id, image_url FROM product_images WHERE id = :iid AND product_id = :pid"
@@ -125,13 +149,12 @@ def delete_product_image(product_id: int, image_id: int, db: Session = Depends(g
     if not row:
         raise HTTPException(status_code=404, detail="Image not found")
 
-    # Delete file from disk if it's a local file
     image_url = row[1]
-    if image_url and image_url.startswith("/static/"):
-        file_path = Path(__file__).resolve().parent.parent.parent / image_url.lstrip("/")
-        if file_path.exists():
-            file_path.unlink()
 
     db.execute(text("DELETE FROM product_images WHERE id = :iid"), {"iid": image_id})
     db.commit()
+    try:
+        await delete_managed_product_image(image_url, local_dir=_UPLOAD_DIR)
+    except (OSError, ProductImageStorageError):
+        pass
     return {"message": "Image deleted"}
