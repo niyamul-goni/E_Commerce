@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import Button from '../../components/Button';
 import ErrorState from '../../components/ErrorState';
 import Loader from '../../components/Loader';
@@ -7,6 +7,30 @@ import { getAllOrdersRequest, updateOrderStatusRequest, createShipmentRequest } 
 import { formatCurrency, formatDate } from '../../utils/format';
 
 const STATUS_OPTIONS = ['pending','confirmed','packed','shipped','delivered','cancelled','returned','refunded'];
+const FALLBACK_TRANSITIONS = {
+  pending: ['pending', 'confirmed', 'cancelled'],
+  confirmed: ['confirmed', 'packed', 'cancelled'],
+  packed: ['packed', 'shipped', 'cancelled'],
+  shipped: ['shipped', 'delivered', 'returned'],
+  delivered: ['delivered', 'returned'],
+  returned: ['returned', 'refunded'],
+  cancelled: ['cancelled'],
+  refunded: ['refunded'],
+};
+
+function statusOptionsFor(order) {
+  return Array.isArray(order.allowed_statuses) && order.allowed_statuses.length
+    ? order.allowed_statuses
+    : FALLBACK_TRANSITIONS[order.status] || [order.status];
+}
+
+function shipmentOptionsFor(orderStatus) {
+  if (orderStatus === 'confirmed') return ['packed', 'in_transit'];
+  if (orderStatus === 'packed') return ['packed', 'in_transit', 'delivered'];
+  if (orderStatus === 'shipped') return ['in_transit', 'delivered', 'returned'];
+  if (orderStatus === 'delivered') return ['delivered', 'returned'];
+  return [];
+}
 
 export default function ManagerOrdersPage() {
   const [loading, setLoading]   = useState(true);
@@ -18,29 +42,75 @@ export default function ManagerOrdersPage() {
   const [search,  setSearch]    = useState('');
   const [shipForm, setShipForm] = useState({ tracking_number:'', carrier:'', status:'in_transit' });
   const [shipping, setShipping] = useState(null); // order being shipped
+  const [savingId, setSavingId] = useState(null);
+  const [notice, setNotice] = useState('');
 
   async function load() {
-    try { setLoading(true); const d = await getAllOrdersRequest(); setOrders(d); setDrafts(Object.fromEntries(d.map((o)=>[o.id,o.status]))); }
+    try {
+      setLoading(true);
+      setError('');
+      const d = await getAllOrdersRequest();
+      setOrders(d);
+      setDrafts(Object.fromEntries(d.map((o)=>[o.id,o.status])));
+    }
     catch (e) { setError(e?.response?.data?.detail || 'Failed to load orders.'); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
   async function handleStatusUpdate(orderId) {
-    try { await updateOrderStatusRequest(orderId, drafts[orderId]); await load(); }
+    const order = orders.find((item) => item.id === orderId);
+    const requestedStatus = drafts[orderId] || order?.status;
+    if (!order || requestedStatus === order.status) return;
+
+    try {
+      setSavingId(orderId);
+      setError('');
+      setNotice('');
+      const updated = await updateOrderStatusRequest(orderId, requestedStatus);
+      setOrders((current) => current.map((item) => (
+        item.id === orderId
+          ? {
+              ...item,
+              status: updated.status,
+              allowed_statuses: updated.allowed_statuses,
+            }
+          : item
+      )));
+      setDrafts((current) => ({ ...current, [orderId]: updated.status }));
+      setNotice(`Order ${order.order_number} is now ${updated.status}.`);
+    }
     catch (e) { setError(e?.response?.data?.detail || 'Status update failed.'); }
+    finally { setSavingId(null); }
   }
 
   async function handleShip(orderId) {
     try {
-      await createShipmentRequest({ order_id: orderId, ...shipForm });
       const order = orders.find((item) => item.id === orderId);
-      if (order?.status === 'packed' && shipForm.status === 'in_transit') {
-        await updateOrderStatusRequest(orderId, 'shipped');
-      }
+      setError('');
+      setNotice('');
+      const shipment = await createShipmentRequest({ order_id: orderId, ...shipForm });
       setShipping(null); setShipForm({ tracking_number:'', carrier:'', status:'in_transit' });
       await load();
+      setNotice(
+        `Shipment saved for ${order?.order_number || `order #${orderId}`}`
+        + (shipment.order_status ? ` · order is now ${shipment.order_status}.` : '.'),
+      );
     } catch (e) { setError(e?.response?.data?.detail || 'Failed to create shipment.'); }
+  }
+
+  function toggleShipping(order) {
+    if (shipping === order.id) {
+      setShipping(null);
+      return;
+    }
+    const options = shipmentOptionsFor(order.status);
+    setShipForm({
+      tracking_number: '',
+      carrier: '',
+      status: options.includes('in_transit') ? 'in_transit' : options[0],
+    });
+    setShipping(order.id);
   }
 
   const filtered = orders.filter((o) => {
@@ -60,6 +130,7 @@ export default function ManagerOrdersPage() {
         </div>
       </div>
       {error && <ErrorState message={error} />}
+      {notice && <p className="inline-message inline-message--success" role="status">{notice}</p>}
 
       <div className="mgr-toolbar">
         <input className="mgr-search" placeholder="Search order # or customer ID…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -80,28 +151,44 @@ export default function ManagerOrdersPage() {
             </thead>
             <tbody>
               {filtered.map((o) => (
-                <>
+                <Fragment key={o.id}>
                   <tr key={o.id} className={expanded===o.id?'mgr-table__expanded':''}>
                     <td><span className="mono">{o.order_number}</span></td>
                     <td className="muted">#{o.customer_id}</td>
                     <td>{formatCurrency(o.total_amount)}</td>
                     <td className="muted">{formatDate(o.order_date)}</td>
                     <td>
-                      <select className="mgr-status-select"
+                      <div className="mgr-order-status-control">
+                        <StatusBadge status={o.status} />
+                        <select className="mgr-status-select"
                         value={drafts[o.id]||o.status}
+                        disabled={savingId === o.id}
                         onChange={(e)=>setDrafts({...drafts,[o.id]:e.target.value})}>
-                        {STATUS_OPTIONS.map((s)=><option key={s} value={s}>{s}</option>)}
-                      </select>
+                          {statusOptionsFor(o).map((s)=>(
+                            <option key={s} value={s}>
+                              {s.charAt(0).toUpperCase()+s.slice(1)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </td>
                     <td>
                       <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap'}}>
-                        <button className="mgr-btn" onClick={()=>handleStatusUpdate(o.id)}>Save</button>
+                        <button
+                          className="mgr-btn"
+                          disabled={savingId === o.id || (drafts[o.id] || o.status) === o.status}
+                          onClick={()=>handleStatusUpdate(o.id)}
+                        >
+                          {savingId === o.id ? 'Saving…' : 'Save'}
+                        </button>
                         <button className="mgr-btn" onClick={()=>setExpanded(expanded===o.id?null:o.id)}>
                           {expanded===o.id?'▲':'▼'} Items
                         </button>
-                        <button className="mgr-btn" onClick={()=>setShipping(shipping===o.id?null:o.id)}>
-                          📦 Ship
-                        </button>
+                        {shipmentOptionsFor(o.status).length > 0 && (
+                          <button className="mgr-btn" onClick={()=>toggleShipping(o)}>
+                            📦 Shipment
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -128,14 +215,20 @@ export default function ManagerOrdersPage() {
                             <input className="field__control" value={shipForm.tracking_number} onChange={(e)=>setShipForm({...shipForm,tracking_number:e.target.value})} placeholder="1Z999…" /></div>
                           <div className="field"><label className="field__label">Ship Status</label>
                             <select className="field__control" value={shipForm.status} onChange={(e)=>setShipForm({...shipForm,status:e.target.value})}>
-                              <option value="packed">Packed</option><option value="in_transit">In Transit</option><option value="delivered">Delivered</option>
+                              {shipmentOptionsFor(o.status).map((shipmentStatus) => (
+                                <option key={shipmentStatus} value={shipmentStatus}>
+                                  {shipmentStatus === 'in_transit'
+                                    ? 'In Transit'
+                                    : shipmentStatus.charAt(0).toUpperCase()+shipmentStatus.slice(1)}
+                                </option>
+                              ))}
                             </select></div>
                         </div>
                         <Button onClick={()=>handleShip(o.id)}>Confirm Shipment</Button>
                       </div>
                     </td></tr>
                   )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>

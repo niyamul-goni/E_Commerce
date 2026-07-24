@@ -87,6 +87,22 @@ class CategoryRead(ORMModel):
     updated_at: datetime
 
 
+class SubcategoryCreate(ORMModel):
+    category_id: int
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+    is_active: bool = True
+    sort_order: int = Field(default=0, ge=0, le=32_767)
+
+
+class SubcategoryUpdate(ORMModel):
+    category_id: Optional[int] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = Field(default=None, ge=0, le=32_767)
+
+
 class SupplierCreate(ORMModel):
     name: str = Field(min_length=1, max_length=150)
     contact_email: Optional[EmailStr] = None

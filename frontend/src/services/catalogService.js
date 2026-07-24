@@ -35,6 +35,26 @@ export async function getSubcategoriesRequest(categoryId = null) {
   return data;
 }
 
+export async function getManagedSubcategoriesRequest() {
+  const { data } = await api.get('/subcategories/manage/all');
+  return data;
+}
+
+export async function createSubcategoryRequest(payload) {
+  const { data } = await api.post('/subcategories', payload);
+  return data;
+}
+
+export async function updateSubcategoryRequest(subcategoryId, payload) {
+  const { data } = await api.put(`/subcategories/${subcategoryId}`, payload);
+  return data;
+}
+
+export async function deleteSubcategoryRequest(subcategoryId) {
+  const { data } = await api.delete(`/subcategories/${subcategoryId}`);
+  return data;
+}
+
 export async function getCategorySubcategoriesRequest(categoryId) {
   const { data } = await api.get(`/categories/${categoryId}/subcategories`);
   return data;

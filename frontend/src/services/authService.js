@@ -1,5 +1,15 @@
 import { api } from './api';
 
+export const CUSTOMER_AUTH_FALLBACK =
+  'Something went wrong. Please try again later.';
+
+export function getCustomerAuthErrorMessage(error) {
+  const detail = error?.response?.data?.detail;
+  return typeof detail === 'string' && detail.trim()
+    ? detail
+    : CUSTOMER_AUTH_FALLBACK;
+}
+
 export async function registerRequest(payload) {
   // Register through the backend API which uses the Supabase service-role key
   // to create the user with auto-confirmed email, then logs them in.

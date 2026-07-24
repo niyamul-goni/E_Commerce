@@ -17,9 +17,14 @@ export default function ManagerReviewsPage() {
   const [replyForms, setReplyForms] = useState({});  // { [reviewId]: text }
   const [saving,   setSaving]   = useState(null);
   const [search,   setSearch]   = useState('');
+  const [notice,   setNotice]   = useState('');
 
   async function load() {
-    try { const d = await getAllReviewsRequest(); setReviews(d); }
+    try {
+      setError('');
+      const d = await getAllReviewsRequest();
+      setReviews(d);
+    }
     catch (e) { setError(e?.response?.data?.detail || 'Failed to load reviews.'); }
     finally { setLoading(false); }
   }
@@ -27,12 +32,27 @@ export default function ManagerReviewsPage() {
 
   async function handleReply(reviewId) {
     const text = (replyForms[reviewId] || '').trim();
-    if (!text) return;
+    if (!text) {
+      setNotice('');
+      setError('Reply text is required.');
+      return;
+    }
     setSaving(reviewId);
+    setError('');
+    setNotice('');
     try {
-      await replyToReviewRequest(reviewId, text);
+      const savedReply = await replyToReviewRequest(reviewId, text);
+      setReviews((current) => current.map((review) => (
+        review.id === reviewId
+          ? {
+              ...review,
+              reply_text: savedReply.reply_text,
+              has_reply: true,
+            }
+          : review
+      )));
       setReplyForms((f) => ({ ...f, [reviewId]: '' }));
-      await load();
+      setNotice('Review reply saved successfully.');
     } catch (e) { setError(e?.response?.data?.detail || 'Reply failed.'); }
     finally { setSaving(null); }
   }
@@ -47,7 +67,7 @@ export default function ManagerReviewsPage() {
   });
 
   if (loading) return <Loader label="Loading reviews" />;
-  if (error)   return <ErrorState message={error} />;
+  if (error && reviews.length === 0) return <ErrorState message={error} />;
 
   const unansweredCount = reviews.filter((r) => !r.has_reply).length;
 
@@ -60,6 +80,7 @@ export default function ManagerReviewsPage() {
         </div>
       </div>
       {error && <ErrorState message={error} />}
+      {notice && <p className="inline-message inline-message--success" role="status">{notice}</p>}
 
       <div className="mgr-toolbar">
         <input className="mgr-search" placeholder="Search by product or customer…" value={search} onChange={(e) => setSearch(e.target.value)} />

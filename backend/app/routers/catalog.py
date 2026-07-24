@@ -31,6 +31,8 @@ from app.schemas import (
     ProductCreate,
     ProductRead,
     ProductUpdate,
+    SubcategoryCreate,
+    SubcategoryUpdate,
     SupplierCreate,
     SupplierRead,
     SupplierUpdate,
@@ -49,8 +51,8 @@ def _slugify(value: str) -> str:
 
 
 def _available_slug(db: Session, table: str, value: str, *, exclude_id: int | None = None) -> str:
-    """Return a unique slug for one of the two allow-listed catalog tables."""
-    if table not in {"categories", "products"}:
+    """Return a unique slug for an allow-listed catalog table."""
+    if table not in {"categories", "products", "subcategories"}:
         raise ValueError("Unsupported slug table")
     base = _slugify(value)
     candidate = base
@@ -65,6 +67,23 @@ def _available_slug(db: Session, table: str, value: str, *, exclude_id: int | No
             return candidate
         candidate = f"{base}-{suffix}"
         suffix += 1
+
+
+def _repair_identity_sequence(db: Session, table: str) -> None:
+    """Keep imported Supabase IDs from colliding with a stale serial sequence."""
+    if table not in {"categories", "subcategories"}:
+        raise ValueError("Unsupported identity-sequence table")
+    db.execute(text(f"LOCK TABLE {table} IN SHARE ROW EXCLUSIVE MODE"))
+    db.execute(text(f"""
+        SELECT setval(
+            pg_get_serial_sequence('{table}', 'id')::regclass,
+            GREATEST(
+                COALESCE((SELECT MAX(id) FROM {table}), 0),
+                nextval(pg_get_serial_sequence('{table}', 'id')::regclass)
+            ),
+            true
+        )
+    """))
 
 
 # ── Categories — map to actual `categories` table ────────────────────────────
@@ -97,8 +116,9 @@ def list_categories_for_manager(db: Session = Depends(get_db)):
 
 @categories_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 def create_category(category_in: CategoryCreate, db: Session = Depends(get_db)):
-    slug = _available_slug(db, "categories", category_in.name)
     try:
+        _repair_identity_sequence(db, "categories")
+        slug = _available_slug(db, "categories", category_in.name)
         row = db.execute(text("""
             INSERT INTO categories (name, slug, description, is_active)
             VALUES (:name, :slug, :description, :is_active)
@@ -281,7 +301,7 @@ _BASE_QUERY = """
         p.description,
         p.base_price    AS price,
         COALESCE((
-            SELECT SUM(inv.current_stock)
+            SELECT SUM(GREATEST(inv.current_stock - inv.reserved_stock, 0))
             FROM product_variants pv
             JOIN inventory inv ON inv.variant_id = pv.id
             WHERE pv.product_id = p.id
@@ -443,7 +463,7 @@ def _resolve_product_references(db: Session, data: dict) -> tuple[int, int, int]
 
 
 def _set_product_stock(db: Session, product_id: int, desired_stock: int, sku: str) -> None:
-    """Adjust aggregate available stock through one inventory row, preserving reservations."""
+    """Set aggregate available stock while preserving every reservation."""
     variant_id = db.execute(text(
         "SELECT id FROM product_variants WHERE product_id = :pid ORDER BY is_active DESC, id LIMIT 1"
     ), {"pid": product_id}).scalar()
@@ -475,15 +495,37 @@ def _set_product_stock(db: Session, product_id: int, desired_stock: int, sku: st
         """), {"variant_id": variant_id, "warehouse_id": warehouse_id, "stock": desired_stock})
         return
 
-    current_available = sum(int(row[1]) - int(row[2]) for row in inventory_rows)
+    current_available = sum(
+        max(0, int(row[1]) - int(row[2]))
+        for row in inventory_rows
+    )
     delta = desired_stock - current_available
-    primary = inventory_rows[0]
-    next_current = int(primary[1]) + delta
-    if next_current < int(primary[2]):
-        raise HTTPException(status_code=409, detail="Requested stock is below currently reserved stock")
-    db.execute(text(
-        "UPDATE inventory SET current_stock = :stock, updated_at = now() WHERE id = :id"
-    ), {"stock": next_current, "id": primary[0]})
+    if delta > 0:
+        primary = inventory_rows[0]
+        db.execute(text(
+            "UPDATE inventory "
+            "SET current_stock = current_stock + :amount, updated_at = now() "
+            "WHERE id = :id"
+        ), {"amount": delta, "id": primary[0]})
+    elif delta < 0:
+        remaining_reduction = -delta
+        for row in inventory_rows:
+            removable = max(0, int(row[1]) - int(row[2]))
+            reduction = min(removable, remaining_reduction)
+            if reduction:
+                db.execute(text(
+                    "UPDATE inventory "
+                    "SET current_stock = current_stock - :amount, updated_at = now() "
+                    "WHERE id = :id"
+                ), {"amount": reduction, "id": row[0]})
+                remaining_reduction -= reduction
+            if remaining_reduction == 0:
+                break
+        if remaining_reduction:
+            raise HTTPException(
+                status_code=409,
+                detail="Requested stock is below currently reserved stock",
+            )
 
 
 @products_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
@@ -612,6 +654,15 @@ def update_product(product_id: int, product_in: ProductUpdate, db: Session = Dep
     existing = db.execute(text("SELECT id, slug FROM products WHERE id = :id"), {"id": product_id}).fetchone()
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+
+    primary_variant = db.execute(text("""
+        SELECT id, sku
+        FROM product_variants
+        WHERE product_id = :product_id
+        ORDER BY is_active DESC, id
+        LIMIT 1
+    """), {"product_id": product_id}).fetchone()
+
     data = product_in.model_dump(exclude_unset=True)
     if "category_id" in data and "subcategory_id" not in data:
         resolved_subcategory = db.execute(text(
@@ -630,7 +681,11 @@ def update_product(product_id: int, product_in: ProductUpdate, db: Session = Dep
             "supplier_id": data.get("supplier_id", current_refs[2]),
             "category_id": data.get("category_id"),
         }
-        _resolve_product_references(db, reference_data)
+        brand_id, subcategory_id, supplier_id = _resolve_product_references(db, reference_data)
+        data["brand_id"] = brand_id
+        data["subcategory_id"] = subcategory_id
+        data["supplier_id"] = supplier_id
+
     updates: dict = {}
     field_map = {
         "name": "name",
@@ -646,28 +701,60 @@ def update_product(product_id: int, product_in: ProductUpdate, db: Session = Dep
         if source in data:
             updates[target] = data[source]
 
-    variant_sku = data.get("sku")
-    if variant_sku:
-        updates["slug"] = _available_slug(db, "products", variant_sku, exclude_id=product_id)
+    current_variant_id = primary_variant[0] if primary_variant else None
+    current_variant_sku = primary_variant[1] if primary_variant else None
+    requested_sku = None
+    sku_changed = False
+    if "sku" in data:
+        requested_sku = (data["sku"] or "").strip()
+        if not requested_sku:
+            raise HTTPException(status_code=400, detail="SKU cannot be empty")
+        sku_changed = requested_sku != current_variant_sku
+
+    if sku_changed:
+        conflicting_variant = db.execute(text("""
+            SELECT id
+            FROM product_variants
+            WHERE lower(sku) = lower(:sku)
+              AND (:variant_id IS NULL OR id != :variant_id)
+            LIMIT 1
+        """), {"sku": requested_sku, "variant_id": current_variant_id}).fetchone()
+        if conflicting_variant is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="This SKU is already used by another product variant.",
+            )
+        updates["slug"] = _available_slug(db, "products", requested_sku, exclude_id=product_id)
 
     try:
         if updates:
             assignments = ", ".join(f"{column} = :{column}" for column in updates)
             db.execute(text(f"UPDATE products SET {assignments}, updated_at = now() WHERE id = :id"), {**updates, "id": product_id})
-        if variant_sku:
-            db.execute(text("""
-                UPDATE product_variants SET sku = :sku, updated_at = now()
-                WHERE id = (SELECT id FROM product_variants WHERE product_id = :pid ORDER BY id LIMIT 1)
-            """), {"sku": variant_sku.strip(), "pid": product_id})
+        if sku_changed and current_variant_id is not None:
+            db.execute(text(
+                "UPDATE product_variants SET sku = :sku, updated_at = now() WHERE id = :variant_id"
+            ), {"sku": requested_sku, "variant_id": current_variant_id})
+        elif sku_changed:
+            db.execute(text(
+                "INSERT INTO product_variants (product_id, sku, is_active) VALUES (:product_id, :sku, true)"
+            ), {"product_id": product_id, "sku": requested_sku})
         if "stock_quantity" in data and data["stock_quantity"] is not None:
-            _set_product_stock(db, product_id, int(data["stock_quantity"]), variant_sku or existing[1])
+            _set_product_stock(
+                db,
+                product_id,
+                int(data["stock_quantity"]),
+                requested_sku or current_variant_sku or existing[1],
+            )
         db.commit()
     except HTTPException:
         db.rollback()
         raise
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Product slug or SKU already exists") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="The product could not be updated because its SKU conflicts with existing catalog data.",
+        ) from exc
 
     if data.get("is_active") is False:
         return {"id": product_id, "is_active": False, "message": "Product updated"}
@@ -801,6 +888,14 @@ async def upload_product_image(
 subcategories_router = APIRouter(prefix="/subcategories", tags=["subcategories"])
 
 
+def _require_active_category(db: Session, category_id: int) -> None:
+    category = db.execute(text(
+        "SELECT id FROM categories WHERE id = :category_id AND is_active = true"
+    ), {"category_id": category_id}).fetchone()
+    if category is None:
+        raise HTTPException(status_code=400, detail="Select an active parent category")
+
+
 @subcategories_router.get("", response_model=list[dict])
 def list_subcategories(category_id: Optional[int] = None, db: Session = Depends(get_db)):
     """List active subcategories, optionally filtered by parent category_id."""
@@ -825,6 +920,135 @@ def list_subcategories(category_id: Optional[int] = None, db: Session = Depends(
         }
         for r in rows
     ]
+
+
+@subcategories_router.get(
+    "/manage/all",
+    response_model=list[dict],
+    dependencies=[Depends(require_admin)],
+)
+def list_subcategories_for_manager(db: Session = Depends(get_db)):
+    rows = db.execute(text("""
+        SELECT sc.id, sc.name, sc.slug, sc.category_id, c.name AS category_name,
+               sc.description, sc.is_active, sc.sort_order
+        FROM subcategories sc
+        LEFT JOIN categories c ON c.id = sc.category_id
+        ORDER BY c.sort_order, sc.sort_order, sc.name
+    """)).fetchall()
+    return [
+        {
+            "id": row[0], "name": row[1], "slug": row[2],
+            "category_id": row[3], "category_name": row[4],
+            "description": row[5], "is_active": row[6], "sort_order": row[7],
+        }
+        for row in rows
+    ]
+
+
+@subcategories_router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
+def create_subcategory(subcategory_in: SubcategoryCreate, db: Session = Depends(get_db)):
+    data = subcategory_in.model_dump()
+    try:
+        _require_active_category(db, data["category_id"])
+        _repair_identity_sequence(db, "subcategories")
+        slug = _available_slug(db, "subcategories", data["name"])
+        row = db.execute(text("""
+            INSERT INTO subcategories (
+                category_id, name, slug, description, is_active, sort_order
+            ) VALUES (
+                :category_id, :name, :slug, :description, :is_active, :sort_order
+            )
+            RETURNING id, name, slug, category_id, description,
+                      is_active, sort_order, created_at, updated_at
+        """), {**data, "slug": slug}).mappings().one()
+        db.commit()
+        return dict(row)
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A subcategory with this name already exists in the selected category",
+        ) from exc
+
+
+@subcategories_router.put(
+    "/{subcategory_id}",
+    dependencies=[Depends(require_admin)],
+)
+def update_subcategory(
+    subcategory_id: int,
+    subcategory_in: SubcategoryUpdate,
+    db: Session = Depends(get_db),
+):
+    existing = db.execute(text(
+        "SELECT id, name, category_id FROM subcategories WHERE id = :id"
+    ), {"id": subcategory_id}).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Subcategory not found")
+
+    data = subcategory_in.model_dump(exclude_unset=True)
+    try:
+        if "category_id" in data:
+            _require_active_category(db, data["category_id"])
+        if "name" in data:
+            data["slug"] = _available_slug(
+                db,
+                "subcategories",
+                data["name"],
+                exclude_id=subcategory_id,
+            )
+        allowed = {
+            "category_id", "name", "slug", "description",
+            "is_active", "sort_order",
+        }
+        updates = {key: value for key, value in data.items() if key in allowed}
+        if updates:
+            assignments = ", ".join(f"{column} = :{column}" for column in updates)
+            db.execute(text(
+                f"UPDATE subcategories SET {assignments}, updated_at = now() WHERE id = :id"
+            ), {**updates, "id": subcategory_id})
+        row = db.execute(text("""
+            SELECT id, name, slug, category_id, description,
+                   is_active, sort_order, created_at, updated_at
+            FROM subcategories
+            WHERE id = :id
+        """), {"id": subcategory_id}).mappings().one()
+        db.commit()
+        return dict(row)
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A subcategory with this name already exists in the selected category",
+        ) from exc
+
+
+@subcategories_router.delete(
+    "/{subcategory_id}",
+    response_model=Message,
+    dependencies=[Depends(require_admin)],
+)
+def delete_subcategory(subcategory_id: int, db: Session = Depends(get_db)):
+    existing = db.execute(text(
+        "SELECT id FROM subcategories WHERE id = :id"
+    ), {"id": subcategory_id}).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Subcategory not found")
+    db.execute(text(
+        "UPDATE subcategories SET is_active = false, updated_at = now() WHERE id = :id"
+    ), {"id": subcategory_id})
+    db.commit()
+    return Message(message="Subcategory deactivated successfully")
 
 
 @categories_router.get("/{category_id}/subcategories", response_model=list[dict])

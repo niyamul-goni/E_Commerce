@@ -5,6 +5,7 @@ import ErrorState from '../components/ErrorState';
 import FormField from '../components/FormField';
 import PageHeader from '../components/PageHeader';
 import { useAuth } from '../context/AuthContext';
+import { getCustomerAuthErrorMessage } from '../services/authService';
 import { validateEmail, validatePassword, createEmptyErrors } from '../utils/validators';
 
 export default function LoginPage() {
@@ -43,7 +44,7 @@ export default function LoginPage() {
         navigate(destination, { replace: true });
       }
     } catch (loginError) {
-      setError(loginError?.response?.data?.detail || loginError?.message || 'Unable to log in.');
+      setError(getCustomerAuthErrorMessage(loginError));
     } finally {
       setSubmitting(false);
     }

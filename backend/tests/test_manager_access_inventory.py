@@ -98,3 +98,17 @@ def test_inventory_reduction_preserves_reserved_stock():
     assert result["reserved_stock"] == 5
     assert result["total_stock"] == 9
     assert result["stock_status"] == "low_stock"
+
+
+@pytest.mark.parametrize(
+    ("available_stock", "expected_status"),
+    [
+        (0, "out_of_stock"),
+        (1, "low_stock"),
+        (19, "low_stock"),
+        (20, "ok"),
+        (21, "ok"),
+    ],
+)
+def test_inventory_low_stock_boundary_is_twenty(available_stock, expected_status):
+    assert auth._inventory_stock_status(available_stock) == expected_status

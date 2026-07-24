@@ -12,7 +12,7 @@ export default function ManagerCustomersPage() {
 
   useEffect(() => {
     getAllCustomersRequest()
-      .then(setCustomers)
+      .then((data) => setCustomers(data.filter((customer) => !customer.is_manager)))
       .catch((e) => setError(e?.response?.data?.detail || 'Failed to load customers.'))
       .finally(() => setLoading(false));
   }, []);
@@ -53,7 +53,6 @@ export default function ManagerCustomersPage() {
                 <th>Orders</th>
                 <th>Total Spend</th>
                 <th>Joined</th>
-                <th>Role</th>
               </tr>
             </thead>
             <tbody>
@@ -74,11 +73,6 @@ export default function ManagerCustomersPage() {
                     <span className={c.total_spend > 1000 ? 'brand-text' : ''}>{formatCurrency(c.total_spend)}</span>
                   </td>
                   <td className="muted">{formatDate(c.created_at)}</td>
-                  <td>
-                    <span className={`role-tag${c.is_manager ? ' role-tag--manager' : ''}`}>
-                      {c.is_manager ? '🏪 Manager' : '🛍️ Customer'}
-                    </span>
-                  </td>
                 </tr>
               ))}
             </tbody>

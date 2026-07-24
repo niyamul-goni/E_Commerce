@@ -7,12 +7,23 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, require_admin
-from app.crud.auth import get_customer_by_email
 from app.database import get_db
 from app.core.supabase import SupabaseAuthError, create_supabase_user, login_supabase_user
 from app.schemas import CustomerRead, RegisterRequest, Token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+REGISTRATION_EMAIL_EXISTS = (
+    "An account with this email already exists. "
+    "Please log in or use a different email."
+)
+CUSTOMER_EMAIL_NOT_FOUND = "No customer account found with this email."
+CUSTOMER_INCORRECT_PASSWORD = "Incorrect password. Please try again."
+CUSTOMER_ACCOUNT_DISABLED = (
+    "Your account has been disabled. Please contact support."
+)
+CUSTOMER_AUTH_SERVER_ERROR = "Something went wrong. Please try again later."
+LOW_STOCK_THRESHOLD = 20
 
 
 class ManagerInventoryUpdate(BaseModel):
@@ -21,28 +32,101 @@ class ManagerInventoryUpdate(BaseModel):
     available_stock: int = Field(ge=0, le=1_000_000)
 
 
+class ManagerReviewReply(BaseModel):
+    reply_text: str = Field(min_length=1, max_length=5_000)
+
+
+def _inventory_stock_status(available_stock: int) -> str:
+    if available_stock <= 0:
+        return "out_of_stock"
+    if available_stock < LOW_STOCK_THRESHOLD:
+        return "low_stock"
+    return "ok"
+
+
+def _resolve_review_reply_admin(db: Session, current_user) -> int:
+    """Link an authorized customer-manager to the normalized admins table."""
+    role_id = db.execute(text("""
+        INSERT INTO roles (name, description)
+        VALUES ('manager', 'Manager portal access')
+        ON CONFLICT (name) DO UPDATE
+        SET description = COALESCE(roles.description, EXCLUDED.description)
+        RETURNING id
+    """)).scalar()
+
+    full_name = " ".join(
+        part.strip()
+        for part in (
+            getattr(current_user, "first_name", ""),
+            getattr(current_user, "last_name", ""),
+        )
+        if part and part.strip()
+    ) or str(current_user.email).split("@", 1)[0]
+
+    admin = db.execute(text("""
+        INSERT INTO admins (email, password_hash, full_name, role_id, is_active)
+        VALUES (:email, 'supabase_managed', :full_name, :role_id, true)
+        ON CONFLICT (email) DO UPDATE
+        SET full_name = EXCLUDED.full_name,
+            role_id = EXCLUDED.role_id,
+            updated_at = now()
+        RETURNING id, is_active
+    """), {
+        "email": str(current_user.email).strip().lower(),
+        "full_name": full_name,
+        "role_id": role_id,
+    }).fetchone()
+    if admin is None or not bool(admin[1]):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This manager profile is inactive",
+        )
+    return int(admin[0])
+
+
+def _customer_token(session: dict) -> Token:
+    try:
+        access_token = session["access_token"]
+        if not access_token:
+            raise ValueError("Supabase session did not contain an access token")
+        return Token(access_token=access_token)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
+
+
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Token:
+    email = str(register_in.email).strip().lower()
+
     # ── 1. Check email uniqueness via raw SQL (avoids ORM column issues) ──────
     try:
         existing = db.execute(
-            text("SELECT id FROM customers WHERE email = :email LIMIT 1"),
-            {"email": register_in.email},
+            text(
+                "SELECT id FROM customers "
+                "WHERE lower(email) = lower(:email) LIMIT 1"
+            ),
+            {"email": email},
         ).fetchone()
         if existing is not None:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered",
+                status_code=status.HTTP_409_CONFLICT,
+                detail=REGISTRATION_EMAIL_EXISTS,
             )
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Database error: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
 
     # ── 2. Create user in Supabase Auth ───────────────────────────────────────
     try:
         create_supabase_user(
-            email=register_in.email,
+            email=email,
             password=register_in.password,
             user_metadata={
                 "first_name": register_in.first_name,
@@ -51,15 +135,42 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
             },
         )
     except SupabaseAuthError as exc:
-        if exc.status_code == 422:
-            raise HTTPException(status_code=409, detail="Email already registered") from exc
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        duplicate_markers = (
+            "already registered",
+            "already been registered",
+            "already exists",
+            "user already",
+        )
+        if exc.status_code in {400, 409, 422} and any(
+            marker in exc.detail.lower() for marker in duplicate_markers
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=REGISTRATION_EMAIL_EXISTS,
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
 
     # ── 3. Log in to get token ─────────────────────────────────────────────────
     try:
-        session = login_supabase_user(email=register_in.email, password=register_in.password)
+        session = login_supabase_user(email=email, password=register_in.password)
     except SupabaseAuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
 
     # ── 4. Ensure a non-privileged row exists in `customers` ──────────────────
     # Public registration must never be able to grant manager access. Existing
@@ -72,7 +183,7 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
             "VALUES (:email, 'supabase_managed', true, false) "
             "ON CONFLICT (email) DO NOTHING"
         ), {
-            "email": register_in.email,
+            "email": email,
         })
         db.commit()
     except Exception:
@@ -86,7 +197,7 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
             "ON CONFLICT (customer_id) DO UPDATE SET "
             "first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name"
         ), {
-            "email": register_in.email,
+            "email": email,
             "fn":    register_in.first_name or "User",
             "ln":    register_in.last_name  or "",
             "phone": register_in.phone,
@@ -95,17 +206,82 @@ def register(register_in: RegisterRequest, db: Session = Depends(get_db)) -> Tok
     except Exception:
         db.rollback()
 
-    return Token(access_token=session["access_token"])
+    return _customer_token(session)
+
+
+def _authenticate_customer(
+    form_data: OAuth2PasswordRequestForm,
+    db: Session,
+) -> Token:
+    """Authenticate only a storefront customer with customer-specific errors."""
+    email = form_data.username.strip().lower()
+
+    try:
+        account = db.execute(text("""
+            SELECT is_admin, is_active
+            FROM customers
+            WHERE lower(email) = lower(:email)
+            LIMIT 1
+        """), {"email": email}).fetchone()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
+
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=CUSTOMER_EMAIL_NOT_FOUND,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if account[0]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Manager accounts must use the separate manager login",
+        )
+    if not account[1]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=CUSTOMER_ACCOUNT_DISABLED,
+        )
+
+    try:
+        session = login_supabase_user(email=email, password=form_data.password)
+    except SupabaseAuthError as exc:
+        invalid_credential_markers = (
+            "invalid login credentials",
+            "invalid credentials",
+            "invalid email or password",
+        )
+        if exc.status_code in {400, 401} and any(
+            marker in exc.detail.lower() for marker in invalid_credential_markers
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=CUSTOMER_INCORRECT_PASSWORD,
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=CUSTOMER_AUTH_SERVER_ERROR,
+        ) from exc
+
+    return _customer_token(session)
 
 
 @router.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Token:
-    try:
-        session = login_supabase_user(email=form_data.username, password=form_data.password)
-    except SupabaseAuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-    return Token(access_token=session["access_token"])
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+) -> Token:
+    """Legacy OAuth customer login alias with customer-specific responses."""
+    return _authenticate_customer(form_data, db)
 
 
 @router.post("/customer-login", response_model=Token)
@@ -114,30 +290,7 @@ def customer_login(
     db: Session = Depends(get_db),
 ) -> Token:
     """Authenticate storefront customers without admitting manager accounts."""
-    try:
-        session = login_supabase_user(email=form_data.username, password=form_data.password)
-    except SupabaseAuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-    account = db.execute(text("""
-        SELECT is_admin, is_active
-        FROM customers
-        WHERE lower(email) = lower(:email)
-        LIMIT 1
-    """), {"email": form_data.username}).fetchone()
-
-    if account is not None and account[0]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Manager accounts must use the separate manager login",
-        )
-    if account is not None and not account[1]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This customer account is inactive",
-        )
-
-    return Token(access_token=session["access_token"])
+    return _authenticate_customer(form_data, db)
 
 
 @router.post("/manager-login", response_model=Token)
@@ -179,7 +332,7 @@ manager_router = APIRouter(prefix="/manager", tags=["manager"])
 
 @manager_router.get("/customers", dependencies=[Depends(require_admin)])
 def list_all_customers(db: Session = Depends(get_db)):
-    """All customers with order count and total spend."""
+    """Non-manager customers with order count and total spend."""
     rows = db.execute(text("""
         SELECT
             c.id, c.email, c.is_active, c.is_admin,
@@ -190,6 +343,7 @@ def list_all_customers(db: Session = Depends(get_db)):
         FROM customers c
         LEFT JOIN customer_profiles cp ON cp.customer_id = c.id
         LEFT JOIN orders o ON o.customer_id = c.id
+        WHERE c.is_admin = false
         GROUP BY c.id, cp.first_name, cp.last_name, cp.phone
         ORDER BY c.created_at DESC
     """)).fetchall()
@@ -201,6 +355,7 @@ def list_all_customers(db: Session = Depends(get_db)):
             "created_at": r[9].isoformat() if r[9] else None,
         }
         for r in rows
+        if not bool(r[3])
     ]
 
 
@@ -231,11 +386,7 @@ def get_inventory_levels(db: Session = Depends(get_db)):
             "is_active": r[5], "total_stock": int(r[6]),
             "reserved_stock": int(r[7]), "available_stock": int(r[8]),
             "variant_count": int(r[9]),
-            "stock_status": (
-                "out_of_stock" if int(r[8]) <= 0
-                else "low_stock" if int(r[8]) < 10
-                else "ok"
-            ),
+            "stock_status": _inventory_stock_status(int(r[8])),
         }
         for r in rows
     ]
@@ -330,11 +481,7 @@ def update_inventory_level(
         db.rollback()
         raise HTTPException(status_code=500, detail="Unable to update inventory") from exc
 
-    stock_status = (
-        "out_of_stock" if payload.available_stock <= 0
-        else "low_stock" if payload.available_stock < 10
-        else "ok"
-    )
+    stock_status = _inventory_stock_status(payload.available_stock)
     return {
         "product_id": product_id,
         "available_stock": payload.available_stock,
@@ -373,37 +520,55 @@ def list_all_reviews(db: Session = Depends(get_db)):
     ]
 
 
-@manager_router.post("/reviews/{review_id}/reply", dependencies=[Depends(require_admin)])
-def reply_to_review(review_id: int, payload: dict, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+@manager_router.post("/reviews/{review_id}/reply")
+def reply_to_review(
+    review_id: int,
+    payload: ManagerReviewReply,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
     """Post or update a manager reply on a review."""
-    reply_text = (payload.get("reply_text") or "").strip()
+    reply_text = payload.reply_text.strip()
     if not reply_text:
         raise HTTPException(status_code=400, detail="Reply text is required")
 
-    admin_id = db.execute(text(
-        "SELECT id FROM admins WHERE email = :email AND is_active = true"
-    ), {"email": current_user.email}).scalar()
-    if admin_id is None:
+    try:
+        review_exists = db.execute(text(
+            "SELECT id FROM reviews WHERE id = :review_id"
+        ), {"review_id": review_id}).fetchone()
+        if review_exists is None:
+            raise HTTPException(status_code=404, detail="Review not found")
+
+        admin_id = _resolve_review_reply_admin(db, current_user)
+        db.execute(text("""
+            INSERT INTO review_replies (review_id, admin_id, body)
+            VALUES (:review_id, :admin_id, :body)
+            ON CONFLICT (review_id) DO UPDATE
+            SET admin_id = EXCLUDED.admin_id,
+                body = EXCLUDED.body,
+                updated_at = now()
+        """), {
+            "review_id": review_id,
+            "admin_id": admin_id,
+            "body": reply_text,
+        })
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
         raise HTTPException(
-            status_code=409,
-            detail="This manager account is not linked to an active admin profile",
-        )
+            status_code=500,
+            detail="Unable to save the review reply. Please try again.",
+        ) from exc
 
-    existing = db.execute(text(
-        "SELECT id FROM review_replies WHERE review_id = :rid"
-    ), {"rid": review_id}).fetchone()
-
-    if existing:
-        db.execute(text(
-            "UPDATE review_replies SET body=:text, updated_at=now() WHERE review_id=:rid"
-        ), {"text": reply_text, "rid": review_id})
-    else:
-        db.execute(text(
-            "INSERT INTO review_replies (review_id, admin_id, body) VALUES (:rid, :aid, :text)"
-        ), {"rid": review_id, "aid": admin_id, "text": reply_text})
-
-    db.commit()
-    return {"message": "Reply saved"}
+    return {
+        "message": "Reply saved",
+        "review_id": review_id,
+        "reply_text": reply_text,
+        "has_reply": True,
+    }
 
 
 @manager_router.get("/returns", dependencies=[Depends(require_admin)])

@@ -21,11 +21,18 @@ function StatRow({ label, value, sub }) {
   );
 }
 
+function formatMonthLabel(monthLabel) {
+  const parsed = new Date(`${monthLabel}-01T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return monthLabel;
+  return parsed.toLocaleDateString(undefined, { month:'short', year:'2-digit', timeZone:'UTC' });
+}
+
 export default function ManagerAnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
   const [kpis,    setKpis]    = useState(null);
   const [monthly, setMonthly] = useState([]);
+  const [monthlyError, setMonthlyError] = useState('');
   const [sellers, setSellers] = useState([]);
   const [byCat,   setByCat]   = useState([]);
   const [topRated,setTopRated]= useState([]);
@@ -35,16 +42,24 @@ export default function ManagerAnalyticsPage() {
     let active = true;
     async function load() {
       try {
-        const [k, m, s, c, r, sup] = await Promise.all([
+        const [k, monthlyResult, s, c, r, sup] = await Promise.all([
           getManagerKPIsRequest().catch(() => null),
-          getMonthlyRevenueRequest(6).catch(() => []),
+          getMonthlyRevenueRequest(6)
+            .then((data) => ({ data, error:'' }))
+            .catch((requestError) => ({
+              data:[],
+              error:requestError?.response?.data?.detail || 'Monthly revenue could not be loaded.',
+            })),
           getBestSellingProductsRequest(10).catch(() => []),
           getRevenueByCategoryRequest().catch(() => []),
           getTopRatedProductsRequest(5).catch(() => []),
           getSupplierPerformanceRequest().catch(() => []),
         ]);
         if (!active) return;
-        setKpis(k); setMonthly(m); setSellers(s); setByCat(c); setTopRated(r); setSuppliers(sup);
+        setKpis(k);
+        setMonthly(monthlyResult.data);
+        setMonthlyError(monthlyResult.error);
+        setSellers(s); setByCat(c); setTopRated(r); setSuppliers(sup);
       } catch (e) {
         if (!active) return;
         setError(e?.response?.data?.detail || 'Failed to load analytics.');
@@ -92,18 +107,27 @@ export default function ManagerAnalyticsPage() {
         {/* ── Monthly Revenue Bar Chart ── */}
         <div className="card mgr-section">
           <h2 className="mgr-section__title">Monthly Revenue (last 6 months)</h2>
-          {monthly.length === 0 ? (
+          {monthlyError ? (
+            <p className="text-danger">{monthlyError}</p>
+          ) : monthly.length === 0 ? (
             <p className="muted">No monthly data yet.</p>
           ) : (
             <div className="bar-chart">
               {[...monthly].reverse().map((m) => {
-                const pct = Math.max(4, (Number(m.total_revenue) / maxRevenue) * 100);
+                const revenue = Number(m.total_revenue) || 0;
+                const pct = revenue > 0 ? Math.max(6, (revenue / maxRevenue) * 100) : 0;
                 return (
                   <div key={m.month_label} className="bar-chart__bar-wrap">
-                    <div className="bar-chart__bar" style={{ height: `${pct}%` }}>
-                      <span className="bar-chart__tooltip">{formatCurrency(m.total_revenue)}</span>
+                    <div className="bar-chart__plot">
+                      <div
+                        className={`bar-chart__bar${revenue === 0 ? ' bar-chart__bar--empty' : ''}`}
+                        style={{ height: `${pct}%` }}
+                        title={`${formatMonthLabel(m.month_label)}: ${formatCurrency(revenue)}`}
+                      >
+                        <span className="bar-chart__tooltip">{formatCurrency(revenue)}</span>
+                      </div>
                     </div>
-                    <span className="bar-chart__label">{m.month_label}</span>
+                    <span className="bar-chart__label">{formatMonthLabel(m.month_label)}</span>
                   </div>
                 );
               })}

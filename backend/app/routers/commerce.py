@@ -32,6 +32,121 @@ ORDER_TRANSITIONS = {
     "cancelled": set(),
     "refunded": set(),
 }
+ORDER_STATUS_SEQUENCE = (
+    "pending",
+    "confirmed",
+    "packed",
+    "shipped",
+    "delivered",
+    "cancelled",
+    "returned",
+    "refunded",
+)
+
+
+def _allowed_order_statuses(current_status: str) -> list[str]:
+    """Return the current state followed by valid manager transitions."""
+    next_statuses = ORDER_TRANSITIONS.get(current_status, set())
+    return [
+        status_name
+        for status_name in ORDER_STATUS_SEQUENCE
+        if status_name == current_status or status_name in next_statuses
+    ]
+
+
+def _order_transition_path(current_status: str, target_status: str) -> list[str] | None:
+    """Find the shortest valid lifecycle path, including both endpoints."""
+    if current_status == target_status:
+        return [current_status]
+
+    queue: list[list[str]] = [[current_status]]
+    visited = {current_status}
+    while queue:
+        path = queue.pop(0)
+        for candidate in ORDER_TRANSITIONS.get(path[-1], set()):
+            if candidate in visited:
+                continue
+            next_path = [*path, candidate]
+            if candidate == target_status:
+                return next_path
+            visited.add(candidate)
+            queue.append(next_path)
+    return None
+
+
+def _sync_order_fulfillment(db: Session, order_id: int, new_status: str) -> None:
+    """Keep shipment and payment state aligned with the order lifecycle."""
+    if new_status == "packed":
+        db.execute(text("""
+            INSERT INTO shipments (order_id, shipment_status)
+            VALUES (:oid, 'packed')
+            ON CONFLICT (order_id) DO UPDATE SET
+                shipment_status = CASE
+                    WHEN shipments.shipment_status::text IN
+                        ('in_transit', 'delivered', 'returned')
+                    THEN shipments.shipment_status
+                    ELSE 'packed'::shipment_status
+                END,
+                updated_at = now()
+        """), {"oid": order_id})
+    elif new_status == "shipped":
+        db.execute(text("""
+            INSERT INTO shipments
+                (order_id, shipment_status, shipped_at)
+            VALUES (:oid, 'in_transit', now())
+            ON CONFLICT (order_id) DO UPDATE SET
+                shipment_status = CASE
+                    WHEN shipments.shipment_status::text IN ('delivered', 'returned')
+                    THEN shipments.shipment_status
+                    ELSE 'in_transit'::shipment_status
+                END,
+                shipped_at = COALESCE(shipments.shipped_at, now()),
+                updated_at = now()
+        """), {"oid": order_id})
+    elif new_status == "delivered":
+        db.execute(text("""
+            INSERT INTO shipments
+                (order_id, shipment_status, shipped_at, delivered_at)
+            VALUES (:oid, 'delivered', now(), now())
+            ON CONFLICT (order_id) DO UPDATE SET
+                shipment_status = CASE
+                    WHEN shipments.shipment_status::text = 'returned'
+                    THEN shipments.shipment_status
+                    ELSE 'delivered'::shipment_status
+                END,
+                shipped_at = COALESCE(shipments.shipped_at, now()),
+                delivered_at = COALESCE(shipments.delivered_at, now()),
+                updated_at = now()
+        """), {"oid": order_id})
+    elif new_status == "returned":
+        db.execute(text("""
+            INSERT INTO shipments
+                (order_id, shipment_status, shipped_at)
+            VALUES (:oid, 'returned', now())
+            ON CONFLICT (order_id) DO UPDATE SET
+                shipment_status = 'returned'::shipment_status,
+                shipped_at = COALESCE(shipments.shipped_at, now()),
+                updated_at = now()
+        """), {"oid": order_id})
+    elif new_status == "refunded":
+        db.execute(text("""
+            UPDATE payments
+            SET payment_status = 'refunded'::payment_status,
+                updated_at = now()
+            WHERE order_id = :oid
+        """), {"oid": order_id})
+
+
+def _apply_order_status(db: Session, order_id: int, new_status: str) -> None:
+    result = db.execute(text("""
+        UPDATE orders
+        SET status = CAST(:status AS order_status), updated_at = now()
+        WHERE id = :oid
+        RETURNING id
+    """), {"status": new_status, "oid": order_id}).fetchone()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _sync_order_fulfillment(db, order_id, new_status)
 
 
 def _coupon_discount(row, subtotal: Decimal) -> Decimal:
@@ -290,6 +405,7 @@ def list_all_orders(db: Session = Depends(get_db)):
             "created_at": row[11].isoformat() if row[11] else None,
             "customer_email": row[12], "item_count": int(row[13]),
             "shipping_address": row[14] or _address_from_notes(row[9]),
+            "allowed_statuses": _allowed_order_statuses(row[3]),
             "items": _order_items(db, row[0]),
         })
     return orders
@@ -325,6 +441,7 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user=Depends
         "order_date": order[10].isoformat() if order[10] else None,
         "created_at": order[11].isoformat() if order[11] else None,
         "shipping_address": order[12] or _address_from_notes(order[9]),
+        "allowed_statuses": _allowed_order_statuses(order[3]),
         "items": _order_items(db, order_id),
     }
 
@@ -332,7 +449,7 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user=Depends
 @orders_router.put("/{order_id}/status", dependencies=[Depends(require_admin)])
 def change_order_status(order_id: int, status_in: dict, db: Session = Depends(get_db)):
     """Update order status (admin only)."""
-    new_status = status_in.get("status", "pending")
+    new_status = str(status_in.get("status", "")).strip().lower()
     if new_status not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid order status")
     try:
@@ -340,24 +457,41 @@ def change_order_status(order_id: int, status_in: dict, db: Session = Depends(ge
             "SELECT status::text FROM orders WHERE id = :oid FOR UPDATE"
         ), {"oid": order_id}).scalar()
         if current_status is None:
-            db.rollback()
             raise HTTPException(status_code=404, detail="Order not found")
-        if new_status != current_status and new_status not in ORDER_TRANSITIONS[current_status]:
-            db.rollback()
+        if current_status not in ORDER_TRANSITIONS:
             raise HTTPException(
                 status_code=409,
-                detail=f"Order cannot move from {current_status} to {new_status}",
+                detail=f"Order has unsupported current status: {current_status}",
             )
-        result = db.execute(text(
-            "UPDATE orders SET status = CAST(:status AS order_status), updated_at = now() WHERE id = :oid RETURNING id"
-        ), {"status": new_status, "oid": order_id}).fetchone()
+        if (
+            new_status != current_status
+            and new_status not in ORDER_TRANSITIONS[current_status]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Order cannot move directly from {current_status} to "
+                    f"{new_status}. Choose an available next status."
+                ),
+            )
+        if new_status != current_status:
+            _apply_order_status(db, order_id, new_status)
         db.commit()
     except HTTPException:
+        db.rollback()
         raise
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"id": order_id, "status": new_status, "message": "Order status updated"}
+        raise HTTPException(
+            status_code=500,
+            detail="Order status update failed. Please try again.",
+        ) from exc
+    return {
+        "id": order_id,
+        "status": new_status,
+        "allowed_statuses": _allowed_order_statuses(new_status),
+        "message": "Order status updated",
+    }
 
 
 @order_items_router.post("/{order_id}/items", status_code=status.HTTP_201_CREATED)
@@ -510,7 +644,12 @@ def get_payment_by_order(order_id: int, db: Session = Depends(get_db), current_u
 def create_shipment_endpoint(shipment_in: dict, db: Session = Depends(get_db)):
     """Create a shipment for an order (admin only)."""
     from sqlalchemy import text as _text
-    
+
+    try:
+        order_id = int(shipment_in.get("order_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="A valid order ID is required") from exc
+
     # Convert empty strings to None to avoid unique constraint violations on tracking_number
     tn = shipment_in.get("tracking_number")
     if tn == "":
@@ -521,32 +660,99 @@ def create_shipment_endpoint(shipment_in: dict, db: Session = Depends(get_db)):
         carrier = None
         
     # Frontend might send "status" instead of "shipment_status"
-    status_val = shipment_in.get("status") or shipment_in.get("shipment_status", "in_transit")
+    status_val = str(
+        shipment_in.get("status")
+        or shipment_in.get("shipment_status", "in_transit")
+    ).strip().lower()
     if status_val not in SHIPMENT_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid shipment status")
-    
+
     try:
+        current_order_status = db.execute(_text(
+            "SELECT status::text FROM orders WHERE id = :oid FOR UPDATE"
+        ), {"oid": order_id}).scalar()
+        if current_order_status is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if current_order_status == "pending":
+            raise HTTPException(
+                status_code=409,
+                detail="Confirm the order before creating a shipment.",
+            )
+
+        target_order_status = {
+            "packed": "packed",
+            "in_transit": "shipped",
+            "delivered": "delivered",
+            "returned": "returned",
+        }.get(status_val)
+        transition_path = (
+            _order_transition_path(current_order_status, target_order_status)
+            if target_order_status
+            else [current_order_status]
+        )
+        if transition_path is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Shipment status {status_val} is not valid for an order "
+                    f"that is {current_order_status}."
+                ),
+            )
+
         result = db.execute(_text(
-            "INSERT INTO shipments (order_id, tracking_number, carrier_name, shipment_status) "
-            "VALUES (:oid, :tn, :carrier, CAST(:status AS shipment_status)) "
+            "INSERT INTO shipments "
+            "(order_id, tracking_number, carrier_name, shipment_status, "
+            " shipped_at, delivered_at) "
+            "VALUES (:oid, :tn, :carrier, CAST(:status AS shipment_status), "
+            " CASE WHEN :status IN ('in_transit', 'delivered', 'returned') "
+            "      THEN now() ELSE NULL END, "
+            " CASE WHEN :status = 'delivered' THEN now() ELSE NULL END) "
             "ON CONFLICT (order_id) DO UPDATE SET "
             "tracking_number = EXCLUDED.tracking_number, "
             "carrier_name = EXCLUDED.carrier_name, "
             "shipment_status = EXCLUDED.shipment_status, "
+            "shipped_at = CASE "
+            "    WHEN EXCLUDED.shipment_status::text IN "
+            "         ('in_transit', 'delivered', 'returned') "
+            "    THEN COALESCE(shipments.shipped_at, now()) "
+            "    ELSE shipments.shipped_at END, "
+            "delivered_at = CASE "
+            "    WHEN EXCLUDED.shipment_status::text = 'delivered' "
+            "    THEN COALESCE(shipments.delivered_at, now()) "
+            "    ELSE shipments.delivered_at END, "
             "updated_at = now() "
             "RETURNING id"
         ), {
-            "oid": shipment_in.get("order_id"),
+            "oid": order_id,
             "tn": tn,
             "carrier": carrier,
             "status": status_val,
         })
         shipment_id = result.scalar_one()
+
+        for next_status in transition_path[1:]:
+            _apply_order_status(db, order_id, next_status)
+
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Shipment conflicts with an order or tracking number") from exc
-    return {"id": shipment_id, "status": status_val, "shipment_status": status_val, "message": "Shipment saved"}
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Shipment update failed. Please try again.",
+        ) from exc
+    return {
+        "id": shipment_id,
+        "status": status_val,
+        "shipment_status": status_val,
+        "order_status": transition_path[-1],
+        "message": "Shipment saved",
+    }
 
 
 @shipments_router.get("/order/{order_id}")

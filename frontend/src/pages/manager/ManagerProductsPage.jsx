@@ -23,6 +23,40 @@ const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'im
 const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+function productToForm(product) {
+  return {
+    name: product.name,
+    sku: product.sku,
+    description: product.description || '',
+    price: String(product.price),
+    stock_quantity: String(product.stock_quantity),
+    category_id: product.category_id ? String(product.category_id) : '',
+    subcategory_id: product.subcategory_id ? String(product.subcategory_id) : '',
+    brand_id: product.brand_id ? String(product.brand_id) : '',
+    supplier_id: product.supplier_id ? String(product.supplier_id) : '',
+    is_active: String(product.is_active),
+    available_sizes: Array.isArray(product.available_sizes)
+      ? product.available_sizes.join(',')
+      : (product.available_sizes || ''),
+  };
+}
+
+function formToPayload(form) {
+  return {
+    name: form.name.trim(),
+    sku: form.sku.trim(),
+    description: form.description.trim() || null,
+    available_sizes: form.available_sizes.trim() || null,
+    price: Number(form.price),
+    stock_quantity: Number(form.stock_quantity),
+    category_id: Number(form.category_id),
+    subcategory_id: Number(form.subcategory_id),
+    brand_id: Number(form.brand_id),
+    supplier_id: Number(form.supplier_id),
+    is_active: form.is_active === 'true',
+  };
+}
+
 function ProductImageCell({ product, previewUrl }) {
   const imageUrl = previewUrl || resolveProductImage(product);
   const [failed, setFailed] = useState(false);
@@ -52,6 +86,7 @@ export default function ManagerProductsPage() {
   const [brands, setBrands]         = useState([]);
   const [suppliers, setSuppliers]   = useState([]);
   const [form, setForm]             = useState(EMPTY);
+  const [originalForm, setOriginalForm] = useState(null);
   const [editId, setEditId]         = useState(null);
   const [saving, setSaving]         = useState(false);
   const [search, setSearch]         = useState('');
@@ -78,14 +113,18 @@ export default function ManagerProductsPage() {
   }, [uploadPreview]);
 
   function startEdit(p) {
+    const nextForm = productToForm(p);
     setEditId(p.id);
-    setForm({ name:p.name, sku:p.sku, description:p.description||'', price:p.price,
-      stock_quantity:p.stock_quantity, category_id:p.category_id || '', subcategory_id:p.subcategory_id || '',
-      brand_id:p.brand_id || '', supplier_id:p.supplier_id || '', is_active:String(p.is_active),
-      available_sizes:Array.isArray(p.available_sizes) ? p.available_sizes.join(',') : (p.available_sizes || '') });
+    setForm(nextForm);
+    setOriginalForm(nextForm);
     setShowForm(true);
   }
-  function cancelEdit() { setEditId(null); setForm(EMPTY); setShowForm(false); }
+  function cancelEdit() {
+    setEditId(null);
+    setForm(EMPTY);
+    setOriginalForm(null);
+    setShowForm(false);
+  }
 
   async function handleSave(e) {
     e.preventDefault();
@@ -105,13 +144,21 @@ export default function ManagerProductsPage() {
     }
     setSaving(true);
     try {
-      const payload = { ...form, name:form.name.trim(), sku:form.sku.trim(),
-        description:form.description.trim() || null,
-        available_sizes:form.available_sizes.trim() || null,
-        price:Number(form.price), stock_quantity:Number(form.stock_quantity),
-        category_id:Number(form.category_id), subcategory_id:Number(form.subcategory_id),
-        brand_id:Number(form.brand_id), supplier_id:Number(form.supplier_id), is_active:form.is_active==='true' };
-      editId ? await updateProductRequest(editId, payload) : await createProductRequest(payload);
+      const payload = formToPayload(form);
+      if (editId) {
+        const originalPayload = formToPayload(originalForm);
+        const changedPayload = Object.fromEntries(
+          Object.entries(payload).filter(([key, value]) => value !== originalPayload[key]),
+        );
+        if (Object.keys(changedPayload).length === 0) {
+          setNotice('No product changes to save.');
+          setSaving(false);
+          return;
+        }
+        await updateProductRequest(editId, changedPayload);
+      } else {
+        await createProductRequest(payload);
+      }
       setNotice(editId ? 'Product updated successfully.' : 'Product created successfully.');
       cancelEdit(); await load(false);
     } catch (e) { setError(e?.response?.data?.detail || 'Save failed.'); }
@@ -192,7 +239,7 @@ export default function ManagerProductsPage() {
           <h2 className="mgr-form-card__title">{editId ? 'Edit Product' : 'Create Product'}</h2>
           <form className="form-grid" onSubmit={handleSave}>
             <FormField label="Name" value={form.name} onChange={(e) => setForm({...form,name:e.target.value})} />
-            <FormField label="SKU" value={form.sku} onChange={(e) => setForm({...form,sku:e.target.value})} />
+            <FormField label={editId ? 'Primary variant SKU' : 'SKU'} value={form.sku} onChange={(e) => setForm({...form,sku:e.target.value})} />
             <FormField label="Price" type="number" step="0.01" value={form.price} onChange={(e) => setForm({...form,price:e.target.value})} />
             <FormField label="Stock" type="number" value={form.stock_quantity} onChange={(e) => setForm({...form,stock_quantity:e.target.value})} />
             <FormField as="select" label="Category" value={form.category_id} onChange={(e) => setForm({...form,category_id:e.target.value,subcategory_id:''})}>

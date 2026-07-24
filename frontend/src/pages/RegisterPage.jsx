@@ -4,6 +4,7 @@ import Button from '../components/Button';
 import ErrorState from '../components/ErrorState';
 import FormField from '../components/FormField';
 import { useAuth } from '../context/AuthContext';
+import { getCustomerAuthErrorMessage } from '../services/authService';
 import {
   createEmptyErrors,
   validateEmail,
@@ -52,7 +53,7 @@ export default function RegisterPage() {
       });
       navigate('/', { replace: true });
     } catch (registerError) {
-      setError(registerError?.response?.data?.detail || registerError?.message || 'Unable to register.');
+      setError(getCustomerAuthErrorMessage(registerError));
     } finally {
       setSubmitting(false);
     }

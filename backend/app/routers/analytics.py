@@ -53,14 +53,32 @@ def monthly_revenue(
     months: int = Query(12, ge=1, le=36),
     db: Session = Depends(get_db)
 ):
-    """Monthly revenue with MoM growth rate (uses monthly_sales_view)."""
-    rows = db.execute(text(f"""
-        SELECT month_label, order_count, unique_customers,
-               total_revenue, total_discounts, avg_order_value,
-               delivered_orders, cancelled_orders, mom_growth_pct
-        FROM monthly_sales_view
-        LIMIT {months}
-    """)).mappings().all()
+    """Return a complete monthly series, including months without sales."""
+    rows = db.execute(text("""
+        WITH month_axis AS (
+            SELECT generate_series(
+                date_trunc('month', CURRENT_DATE)
+                    - (:months - 1) * INTERVAL '1 month',
+                date_trunc('month', CURRENT_DATE),
+                INTERVAL '1 month'
+            ) AS month_start
+        )
+        SELECT
+            to_char(axis.month_start, 'YYYY-MM') AS month_label,
+            COALESCE(sales.order_count, 0) AS order_count,
+            COALESCE(sales.unique_customers, 0) AS unique_customers,
+            COALESCE(sales.total_revenue, 0) AS total_revenue,
+            COALESCE(sales.total_discounts, 0) AS total_discounts,
+            COALESCE(sales.avg_order_value, 0) AS avg_order_value,
+            COALESCE(sales.delivered_orders, 0) AS delivered_orders,
+            COALESCE(sales.cancelled_orders, 0) AS cancelled_orders,
+            sales.mom_growth_pct
+        FROM month_axis axis
+        LEFT JOIN monthly_sales_view sales
+          ON to_date(sales.month_label || '-01', 'YYYY-MM-DD')
+             = axis.month_start::date
+        ORDER BY axis.month_start DESC
+    """), {"months": months}).mappings().all()
     return [dict(r) for r in rows]
 
 

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import {
+  CUSTOMER_AUTH_FALLBACK,
   getCurrentUserRequest,
   loginRequest,
   managerLoginRequest,
@@ -54,7 +55,11 @@ export function AuthProvider({ children }) {
 
   async function login(email, password) {
     const response = await loginRequest(email, password);
-    return hydrateSession(response.access_token);
+    try {
+      return await hydrateSession(response.access_token);
+    } catch {
+      throw new Error(CUSTOMER_AUTH_FALLBACK);
+    }
   }
 
   async function managerLogin(email, password) {
@@ -70,7 +75,11 @@ export function AuthProvider({ children }) {
 
   async function register(payload) {
     const response = await registerRequest(payload);
-    return hydrateSession(response.access_token);
+    try {
+      return await hydrateSession(response.access_token);
+    } catch {
+      throw new Error(CUSTOMER_AUTH_FALLBACK);
+    }
   }
 
   function logout() {
