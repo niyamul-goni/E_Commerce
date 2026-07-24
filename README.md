@@ -44,6 +44,19 @@ Use `PRODUCT_IMAGE_STORAGE=local` only for offline development. Local uploads
 are written to `backend/static/products` and must be committed separately if
 another clone needs them. Never commit `backend/.env` or the service role key.
 
+If images were uploaded before shared storage was enabled, run the migration on
+the computer that still has the original files:
+
+```bash
+cd backend
+python3 migrate_local_product_images.py --verbose
+python3 migrate_local_product_images.py --apply
+```
+
+The first command is read-only. The second uploads only files that exist on that
+computer, changes only their matching `product_images.image_url` rows, and
+preserves the original local files.
+
 ## Database
 
 You can initialize the database with either:
